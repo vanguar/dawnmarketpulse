@@ -1,89 +1,94 @@
 #!/usr/bin/env python3
-"""
-Daily market report → Telegram-канал.
-Cron-время: 07:05 UTC ≈ 09:05 Europe/Kyiv (настраивается в railway.json).
-
-ENV-переменные (в Railway):
-  OPENAI_KEY   – ключ OpenAI
-  TG_TOKEN     – токен Telegram-бота
-  CHANNEL_ID   – @username канала ИЛИ -100… ID
-  TZ           – Europe/Berlin
-"""
-
 import os, sys, requests, openai
 from datetime import datetime, timezone, date
+from time import sleep
 
-# ── ENV ─────────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN       = os.getenv("TG_TOKEN")
 CHANNEL_ID     = os.getenv("CHANNEL_ID")
 
-MODEL        = "gpt-4o-mini"   # можно 'gpt-4o'
-TIMEOUT      = 60              # сек
-MAX_TOKENS   = 350             # ≈ 1 500 символов
+MODEL       = "gpt-4o-mini"
+TIMEOUT     = 60
+MAX_TOKENS  = 450            # ≈ 1900–2000 символов
+TG_LIMIT    = 4096           # лимит одного поста
 
-# ── PROMPT ──────────────────────────────────────────────────────
 PROMPT = """
 📈 Утренний обзор • {date}
 
 Индексы 📊
 • S&P 500, DAX, Nikkei, Nasdaq fut
-→ Одной строкой: Что это значит для инвестора?
+→ Что это значит для инвестора?
 
 Акции-лидеры 🚀 / Аутсайдеры 📉
-• по 2–3 бумаги + краткая причина движения
-→ Вывод для инвестора.
+• по 2–3 бумаги + причина
+→ Вывод.
 
 Крипта ₿
-• BTC, ETH + 3 ярких альткоина (цена и %)
+• BTC, ETH + 3 альткоина (цена и %)
 → Короткий вывод.
 
 Макро-новости 📰
-• три заголовка + влияние на рынок
+• 3 заголовка + влияние
 
 Цитаты дня 🗣
-• до 3 цитат + смысл для рынка
+• до 3 цитат + смысл
 
 Число-факт 🤔
 
 ⚡️ Идея дня
 • 2–3 предложения actionable-совета.
 
-‼️ Пиши **только** обычный текст (без HTML/Markdown).  
-‼️ Итоговый объём ≤ 1 500 символов.
+Только обычный текст (без HTML/Markdown). Объём ~2000 символов максимум.
 """
 
-# ── helpers ─────────────────────────────────────────────────────
-def log(msg: str) -> None:
+def log(msg):
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     print(f"[{ts}] {msg}", flush=True)
 
-def get_report() -> str:
+def get_report():
     prompt = PROMPT.format(date=date.today().isoformat())
-    resp = openai.ChatCompletion.create(
+    r = openai.ChatCompletion.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         timeout=TIMEOUT,
         temperature=0.4,
-        max_tokens=MAX_TOKENS
+        max_tokens=MAX_TOKENS,
     )
-    return resp.choices[0].message.content.strip()
+    return r.choices[0].message.content.strip()
 
-def post_to_tg(text: str) -> None:
+def split_long(text: str):
+    """Режем по абзацам, чтобы каждый кусок ≤ TG_LIMIT."""
+    if len(text) <= TG_LIMIT:
+        return [text]
+    parts, chunk, length = [], [], 0
+    for p in text.split("\n\n"):
+        p += "\n\n"
+        if length + len(p) > TG_LIMIT:
+            parts.append(''.join(chunk).rstrip())
+            chunk, length = [], 0
+        chunk.append(p)
+        length += len(p)
+    if chunk:
+        parts.append(''.join(chunk).rstrip())
+    # добавляем маркеры (1/3)
+    total = len(parts)
+    return [f"({i+1}/{total})\n{part}" for i, part in enumerate(parts)]
+
+def post_to_tg(text: str):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    r = requests.post(url, json={
-        "chat_id": CHANNEL_ID,
-        "text": text,
-        "disable_web_page_preview": True
-    }, timeout=10)
-    if r.status_code != 200:
-        log(f"Telegram error {r.status_code}: {r.text}")
+    for part in split_long(text):
+        r = requests.post(url, json={
+            "chat_id": CHANNEL_ID,
+            "text": part,
+            "disable_web_page_preview": True
+        }, timeout=10)
+        if r.status_code != 200:
+            log(f"Telegram error {r.status_code}: {r.text}")
+        sleep(1)
 
-# ── main ───────────────────────────────────────────────────────
-def main() -> None:
+def main():
     try:
-        report = get_report()
-        post_to_tg(report)
+        post_to_tg(get_report())
         log("Posted OK.")
     except Exception as e:
         log(f"Fatal: {e}")
@@ -91,4 +96,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
