@@ -1,0 +1,9 @@
+{
+    "services": {
+      "tg-report": {
+        "start": "python main.py",
+        "schedule": "5 7 * * *"
+      }
+    }
+  }
+  
