@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, requests, openai
 from datetime import datetime, timezone, date
+from textwrap import wrap
 from time import sleep
 
 openai.api_key = os.getenv("OPENAI_KEY")
@@ -9,8 +10,8 @@ CHANNEL_ID     = os.getenv("CHANNEL_ID")
 
 MODEL       = "gpt-4o-mini"
 TIMEOUT     = 60
-MAX_TOKENS  = 450            # ≈ 1900–2000 символов
-TG_LIMIT    = 4096           # лимит одного поста
+TG_LIMIT    = 4096          # технический лимит Telegram
+GPT_TOKENS  = 400           # ~1 600–1 800 символов
 
 PROMPT = """
 📈 Утренний обзор • {date}
@@ -24,75 +25,62 @@ PROMPT = """
 → Вывод.
 
 Крипта ₿
-• BTC, ETH + 3 альткоина (цена и %)
-→ Короткий вывод.
+• BTC, ETH + 3 альткоина
+→ Вывод.
 
 Макро-новости 📰
-• 3 заголовка + влияние
+• 3 главных заголовка + влияние
 
 Цитаты дня 🗣
-• до 3 цитат + смысл
+• до 2 цитат + смысл
 
 Число-факт 🤔
 
-⚡️ Идея дня
-• 2–3 предложения actionable-совета.
+⚡️ Идея дня – 2 предложения actionable-совета.
 
-Только обычный текст (без HTML/Markdown). Объём ~2000 символов максимум.
+‼️ Только обычный текст, без HTML. Максимум 1 600 символов.
 """
 
 def log(msg):
-    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-    print(f"[{ts}] {msg}", flush=True)
+    print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC] {msg}", flush=True)
 
-def get_report():
-    prompt = PROMPT.format(date=date.today().isoformat())
+def gpt_report():
     r = openai.ChatCompletion.create(
         model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": PROMPT.format(date=date.today())}],
         timeout=TIMEOUT,
         temperature=0.4,
-        max_tokens=MAX_TOKENS,
+        max_tokens=GPT_TOKENS,
     )
     return r.choices[0].message.content.strip()
 
-def split_long(text: str):
-    """Режем по абзацам, чтобы каждый кусок ≤ TG_LIMIT."""
-    if len(text) <= TG_LIMIT:
-        return [text]
-    parts, chunk, length = [], [], 0
-    for p in text.split("\n\n"):
-        p += "\n\n"
-        if length + len(p) > TG_LIMIT:
-            parts.append(''.join(chunk).rstrip())
-            chunk, length = [], 0
-        chunk.append(p)
-        length += len(p)
-    if chunk:
-        parts.append(''.join(chunk).rstrip())
-    # добавляем маркеры (1/3)
+def chunk(text, limit=TG_LIMIT):
+    parts = wrap(text, width=limit-20, break_long_words=False, break_on_hyphens=False)
     total = len(parts)
-    return [f"({i+1}/{total})\n{part}" for i, part in enumerate(parts)]
+    return [f"({i+1}/{total})\n{p}" if total > 1 else p for i, p in enumerate(parts)]
 
-def post_to_tg(text: str):
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    for part in split_long(text):
-        r = requests.post(url, json={
-            "chat_id": CHANNEL_ID,
-            "text": part,
-            "disable_web_page_preview": True
-        }, timeout=10)
+def send(text):
+    for part in chunk(text):
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": CHANNEL_ID, "text": part, "disable_web_page_preview": True},
+            timeout=10
+        )
         if r.status_code != 200:
-            log(f"Telegram error {r.status_code}: {r.text}")
+            log(f"TG error {r.status_code}: {r.text}")
         sleep(1)
 
 def main():
     try:
-        post_to_tg(get_report())
+        send(gpt_report())
         log("Posted OK.")
     except Exception as e:
         log(f"Fatal: {e}")
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+
 
 if __name__ == "__main__":
     main()
