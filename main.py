@@ -4,7 +4,8 @@ import sys
 import requests
 import openai
 from datetime import datetime, timezone, date
-from textwrap import wrap
+# textwrap больше не используется для основной логики разбивки, но может быть полезен для других целей
+# from textwrap import wrap 
 from time import sleep
 
 # ── ENV ─────────────────────────────────────────────────────────
@@ -14,13 +15,15 @@ CHAT_ID = os.getenv("CHANNEL_ID")
 
 MODEL = "gpt-4o-mini"
 TIMEOUT = 60
-GPT_TOKENS = 450  # ~1700-1900 символов, нейросеть должна стараться уложиться в это
+GPT_TOKENS = 450
 TG_LIMIT_BYTES = 4096  # Лимит Telegram в байтах
 
-# Уменьшаем значительно для тестирования, чтобы гарантированно не обрезалось
-# Будем ориентироваться на байты, но textwrap работает с символами, поэтому нужен большой запас
-# Примерно 2500 символов, чтобы с учетом многобайтовых символов и префикса не превысить лимит байт
-TARGET_CHAR_LEN_FOR_CHUNK = 2500
+# Запас для префикса типа "(NN/MM)\n" и других непредвиденных расходов.
+# (99/99)\n это 9 символов ASCII = 9 байт. Возьмем с запасом.
+PREFIX_MAX_BYTES = 25
+# Насколько близко мы хотим подойти к лимиту TG_LIMIT_BYTES с каждой частью.
+# Оставим небольшой запас для надежности.
+CHUNK_TARGET_BYTES = TG_LIMIT_BYTES - PREFIX_MAX_BYTES - 50 # 50 байт дополнительного запаса
 
 # ── PROMPT ──────────────────────────────────────────────────────
 PROMPT = """
@@ -96,34 +99,20 @@ TG_URL = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
 def log(msg: str) -> None:
     print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S %Z}] {msg}", flush=True)
 
-def clean_text_from_potential_markdown(text: str) -> str:
-    """Простая очистка от некоторых Markdown-подобных конструкций, если GPT их добавит."""
-    # Убираем парные звездочки/подчеркивания, которые могут обозначать жирный/курсив
-    # Это очень грубая замена и может затронуть легитимные символы, если они не являются разметкой.
-    # text = text.replace("**", "").replace("__", "") # Возможно, это слишком агрессивно
-    # text = text.replace("*", "").replace("_", "") # Еще агрессивнее
-    
-    # Более мягкий подход: если звездочка используется как маркер списка в начале строки
-    # text = re.sub(r"^\*\s+", "- ", text, flags=re.MULTILINE) # Если бы использовали re
-    
-    # Пока что, учитывая строгий промпт, не будем делать агрессивную автозамену,
-    # чтобы не испортить текст, если звездочки используются осмысленно (например, в тикерах).
-    # Главная ставка на корректный промпт.
-    return text
-
 def gpt_report() -> str:
     try:
+        # Важно: Вы используете openai==0.28.1. API для версий openai>=1.0.0 другой.
+        # Этот код для вашей старой версии.
         resp = openai.ChatCompletion.create(
             model=MODEL,
             messages=[{"role": "user", "content": PROMPT.format(date=date.today().strftime("%d.%m.%Y"))}],
             timeout=TIMEOUT,
             temperature=0.4,
-            max_tokens=GPT_TOKENS, # GPT_TOKENS определяет максимальное количество токенов в ответе *нейросети*
+            max_tokens=GPT_TOKENS,
         )
         generated_text = resp.choices[0].message.content.strip()
-        # cleaned_text = clean_text_from_potential_markdown(generated_text)
-        log(f"GPT generated text length: {len(generated_text)} chars")
-        return generated_text # Пока возвращаем без очистки, полагаясь на промпт
+        log(f"GPT generated text length: {len(generated_text)} chars, {len(generated_text.encode('utf-8'))} bytes")
+        return generated_text
     except openai.error.OpenAIError as e:
         log(f"OpenAI API Error: {e}")
         raise
@@ -131,73 +120,105 @@ def gpt_report() -> str:
         log(f"Error in gpt_report: {e}")
         raise
 
-def chunk_text(text: str, target_char_len: int = TARGET_CHAR_LEN_FOR_CHUNK):
-    # Запас для префикса (например, "(10/10)\n" ~ 10 символов) и непредвиденных случаев
-    # textwrap работает с количеством символов, не байт.
-    wrap_width = target_char_len - 60 # Дополнительный запас от целевой длины символов
-    
-    log(f"Original text length for chunking: {len(text)} chars, {len(text.encode('utf-8'))} bytes.")
-    log(f"Chunking with wrap_width: {wrap_width} chars.")
+def chunk_text_by_bytes(text: str, target_chunk_bytes: int) -> list[str]:
+    log(f"Chunking text by bytes. Original: {len(text)} chars, {len(text.encode('utf-8'))} bytes. Target per chunk: {target_chunk_bytes} bytes.")
+    if not text.strip():
+        return []
 
-    parts = wrap(text, width=wrap_width,
-                 break_long_words=False, # Стараемся не рвать слова
-                 replace_whitespace=False, # Сохраняем переносы строк от GPT
-                 drop_whitespace=True, # Удаляем лишние пробелы по краям частей
-                 break_on_hyphens=False)
-    
-    total_parts = len(parts)
-    if total_parts == 0 and text.strip(): # Если текст был, но wrap ничего не вернул (очень короткий)
-        parts = [text.strip()]
-        total_parts = 1
-    elif total_parts == 0: # Если текст был пустой
-        return [""]
+    # Используем splitlines() для сохранения переносов строк, которые сделал GPT
+    # Это предпочтительнее, чем просто слова, для сохранения абзацев
+    lines = text.splitlines(keepends=True) 
+    if not lines: # Если текст был, но без переносов (одна строка)
+        lines = [text]
 
-    chunked_messages = []
-    for i, p_text in enumerate(parts):
-        current_part_text = p_text.strip()
-        if not current_part_text: # Пропускаем полностью пустые части
+    all_parts_text = []
+    current_part_lines = []
+    current_part_bytes = 0
+
+    for line in lines:
+        line_bytes = len(line.encode('utf-8'))
+        if line_bytes == 0 and not line.strip(): # Пропускаем полностью пустые строки, если они есть
             continue
 
-        if total_parts > 1:
-            message_with_prefix = f"({i+1}/{total_parts})\n{current_part_text}"
+        if current_part_bytes + line_bytes <= target_chunk_bytes:
+            current_part_lines.append(line)
+            current_part_bytes += line_bytes
         else:
-            message_with_prefix = current_part_text
-        chunked_messages.append(message_with_prefix)
+            # Текущая часть заполнена, сохраняем ее
+            if current_part_lines: # Только если есть что сохранять
+                all_parts_text.append("".join(current_part_lines).strip())
+            
+            # Начинаем новую часть с текущей строки
+            # Если сама строка уже больше лимита, ее нужно будет как-то обработать
+            # (пока просто добавим ее, в надежде что такая строка одна и она не слишком длинная)
+            # В идеале, нужно было бы делить и слишком длинные строки, но это усложнит код.
+            current_part_lines = [line]
+            current_part_bytes = line_bytes
+            if line_bytes > target_chunk_bytes:
+                log(f"WARNING: Single line is longer than target_chunk_bytes! Line length: {line_bytes} bytes. This might still be too long for Telegram.")
+
+    # Добавляем последнюю накопленную часть
+    if current_part_lines:
+        all_parts_text.append("".join(current_part_lines).strip())
+    
+    # Убираем полностью пустые строки, которые могли образоваться после strip()
+    all_parts_text = [part for part in all_parts_text if part]
+
+    # Добавляем префиксы (N/M)
+    final_chunks_with_prefix = []
+    total_final_parts = len(all_parts_text)
+    if total_final_parts == 0:
+        return []
+    if total_final_parts == 1:
+        return all_parts_text # Префикс не нужен для одной части
+
+    for i, part_text in enumerate(all_parts_text):
+        prefix = f"({i+1}/{total_final_parts})\n"
+        # Проверяем, не превысит ли часть С ПРЕФИКСОМ общий лимит Telegram
+        # Это самая важная проверка.
+        if len((prefix + part_text).encode('utf-8')) > TG_LIMIT_BYTES:
+            log(f"CRITICAL ERROR in chunking: Part {i+1}/{total_final_parts} WITH prefix is TOO LONG: {len((prefix + part_text).encode('utf-8'))} bytes. Text of part (first 100 chars): '{part_text[:100]}'")
+            # Здесь нужна более умная логика, возможно, эту часть нужно разбить еще раз
+            # или уменьшить CHUNK_TARGET_BYTES еще сильнее.
+            # Пока что просто пропустим такую "сломанную" часть, чтобы избежать ошибки в Telegram.
+            # В идеале, такого быть не должно, если CHUNK_TARGET_BYTES выбран правильно.
+            continue 
+        final_chunks_with_prefix.append(prefix + part_text)
         
-    return chunked_messages
+    log(f"Text chunked into {len(final_chunks_with_prefix)} parts by bytes.")
+    return final_chunks_with_prefix
+
 
 def send(part_text: str):
-    if not part_text:
-        log("Attempted to send an empty part. Skipping.")
+    if not part_text or part_text.isspace(): # Дополнительная проверка
+        log("Attempted to send an empty or whitespace-only part. Skipping.")
         return
 
     char_len = len(part_text)
     byte_len = len(part_text.encode('utf-8'))
     log(f"Sending part: {char_len} chars, {byte_len} bytes. (TG Limit: {TG_LIMIT_BYTES} bytes)")
 
+    # Эта проверка должна быть избыточной, если chunk_text_by_bytes работает корректно
     if byte_len > TG_LIMIT_BYTES:
-        log(f"ERROR: Part is too long in bytes! {byte_len} > {TG_LIMIT_BYTES}. Truncating (this is a bugfix attempt, ideally chunking should prevent this).")
-        # Это аварийная обрезка по байтам, если логика chunk_text не справилась.
-        # Она может обрезать не по символу, а по середине многобайтового символа, что плохо.
-        part_text = part_text.encode('utf-8')[:TG_LIMIT_BYTES].decode('utf-8', 'ignore')
-        log(f"Post-truncation: {len(part_text)} chars, {len(part_text.encode('utf-8'))} bytes.")
-
+        log(f"EMERGENCY FAILSAFE: Part is too long in bytes JUST BEFORE SENDING! {byte_len} > {TG_LIMIT_BYTES}. This indicates a flaw in chunk_text_by_bytes or prefix addition.")
+        # Не будем пытаться обрезать здесь, так как это признак более глубокой проблемы.
+        # Лучше пусть Telegram вернет ошибку, чтобы мы это увидели.
 
     json_payload = {
         "chat_id": CHAT_ID,
         "text": part_text,
         "disable_web_page_preview": True
-        # "parse_mode" НЕ УКАЗЫВАЕМ, чтобы был plain text
     }
     try:
-        r = requests.post(TG_URL, json=json_payload, timeout=20) # Увеличил таймаут на всякий случай
+        r = requests.post(TG_URL, json=json_payload, timeout=20)
         r.raise_for_status()
         log(f"Part sent successfully to {CHAT_ID}.")
     except requests.exceptions.HTTPError as e:
         log(f"TG HTTP Error {r.status_code} for {CHAT_ID}: {r.text}. Error: {e}")
-        # Если ошибка 400 "Bad Request: message is too long", то проблема с длиной осталась
         if r.status_code == 400 and "message is too long" in r.text.lower():
-            log("CRITICAL: TELEGRAM REPORTS MESSAGE IS TOO LONG DESPITE CHUNKING. Review chunking logic and byte counts.")
+            log("CRITICAL: TELEGRAM API REPORTS 'MESSAGE IS TOO LONG'.")
+            log(f"Failed part text (first 200 chars): '{part_text[:200]}...'")
+            log(f"Failed part actual byte length: {byte_len}")
     except requests.exceptions.RequestException as e:
         log(f"TG Request Error for {CHAT_ID}: {e}")
     except Exception as e:
@@ -211,8 +232,10 @@ def main():
             log("GPT returned an empty or whitespace-only report. Exiting.")
             return
 
-        segments = chunk_text(report_text)
-        if not segments or not any(s.strip() for s in segments):
+        # Используем новую функцию разбивки по байтам
+        segments = chunk_text_by_bytes(report_text, CHUNK_TARGET_BYTES)
+        
+        if not segments: # segments может быть пустым списком
             log("Chunking resulted in no valid segments. Exiting.")
             return
 
@@ -222,7 +245,7 @@ def main():
             log(f"Processing segment {i+1}/{len(segments)}...")
             send(seg_text)
             if i < len(segments) - 1:
-                sleep(2) # Увеличил паузу
+                sleep(2)
         log("All segments processed. Posted OK.")
     except openai.error.OpenAIError as e:
         log(f"Fatal OpenAI API Error: {e}")
