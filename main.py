@@ -1,52 +1,61 @@
 #!/usr/bin/env python3
 """
-Daily market report → Telegram.
-Cron: 07:05 UTC ≈ 09:05 Europe/Kyiv (см. railway.json).
+Daily market report → Telegram-канал
+Cron: 07:05 UTC ≈ 09:05 Europe/Kyiv (см. railway.json)
 """
 
-import os, sys, requests, openai
+import os, sys, html, requests, openai
 from datetime import datetime, timezone, date
 from time import sleep
 
-# ── .env (локально) ───────────────────────
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-# ── ENV vars ──────────────────────────────
+# ─── ENV ────────────────────────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN       = os.getenv("TG_TOKEN")
 CHANNEL_ID     = os.getenv("CHANNEL_ID")
 
-MODEL          = "gpt-4o-mini"       # можно «gpt-4o»
+MODEL          = "gpt-4o-mini"         # или "gpt-4o"
 RETRIES        = 3
 TIMEOUT        = 60
-MAX_TG_LEN     = 4096                # лимит Telegram
+MAX_TG_LEN     = 4096                  # лимит Telegram
 
-# ── PROMPT (HTML) ─────────────────────────
+# ─── PROMPT ─────────────────────────────────────────────────────────────────────
 USER_PROMPT = """
-Сформируй углублённый утренний обзор рынков на {date}
-и выведи сразу в <b>Telegram-HTML</b> (используй теги <b>, <i>, <u>, <code>).
-Структура и требования:
+Сформируй углублённый утренний обзор рынков на {date}.
+Верни текст сразу в Telegram-HTML (разрешены только<b>,<i>,<u>,<s>,<code>,<a>).
+Структура:
 
-• Заголовок H1 с эмодзи 📈.  
-• Блок «Индексы» 📊 (4 шт.) — жирные цифры, затем одна строка «Что это значит…».  
-• «Акции-лидеры 🚀» и «Аутсайдеры 📉» (по 2-3).  
-• «Крипто» ₿: BTC, ETH + 3 альткоина.  
-• «Макро-новости» 📰 (3 шт.) — и интерпретация.  
-• «Цитаты дня» 🗣 (до 3) + смысл для рынка.  
-• «Число-факт» 🤔 — жирным числом и пояснением.  
-• Заверши блоком «⚡️ Идея дня» — 2-3 предложения.
+<b>📈 Утренний обзор • {date}</b>
+<b>Индексы 📊</b>
+• S&P 500, DAX, Nikkei, Nasdaq fut → + одна строка: Что это значит для инвестора?
 
-Стиль дружелюбный и профессиональный; списки размечай тегом &lt;ul&gt;&lt;li&gt;; избегай Markdown-символов. Объём ≤ 450 слов.
+<b>Акции-лидеры 🚀 / Аутсайдеры 📉</b>
+• по 2–3 бумаги в каждом подблоке, затем вывод.
+
+<b>Крипто ₿</b>
+• BTC, ETH + 3 альткоина, затем вывод.
+
+<b>Макро-новости 📰</b>
+• три пункта + расшифровка влияния.
+
+<b>Цитаты дня 🗣</b>
+• до 3 цитат с краткой интерпретацией.
+
+<b>Число-факт 🤔</b>
+<b>⚡️ Идея дня</b> — 2-3 предложения actionable-совета.
+
+Требования:
+• Тон дружелюбный, но профессиональный. Без Markdown-символов.  
+• Максимум 450 слов.
 """
 
-# ── helpers ───────────────────────────────
+# ─── helpers ───────────────────────────────────────────────────────────────────
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     print(f"[{ts}] {msg}", flush=True)
+
+def safe_html(text: str) -> str:
+    """Экранируем &, <, > чтобы Telegram-HTML не сломался."""
+    return html.escape(text, quote=False).replace("&amp;nbsp;", " ")
 
 def get_report() -> str:
     prompt = USER_PROMPT.format(date=date.today().isoformat())
@@ -70,7 +79,8 @@ def get_report() -> str:
 def split_long(text: str):
     if len(text) <= MAX_TG_LEN:
         return [text]
-    parts, chunk, length = [], [], 0
+    parts, chunk = [], []
+    length = 0
     for line in text.splitlines(True):
         if length + len(line) > MAX_TG_LEN:
             parts.append(''.join(chunk))
@@ -84,6 +94,7 @@ def split_long(text: str):
 def post_to_tg(text: str):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     for part in split_long(text):
+        part = safe_html(part)
         r = requests.post(url, json={
             "chat_id": CHANNEL_ID,
             "text": part,
@@ -94,7 +105,7 @@ def post_to_tg(text: str):
             log(f"Telegram error {r.status_code}: {r.text}")
         sleep(1)
 
-# ── main ──────────────────────────────────
+# ─── main ──────────────────────────────────────────────────────────────────────
 def main():
     try:
         report = get_report()
