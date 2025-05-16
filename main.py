@@ -1,78 +1,75 @@
 #!/usr/bin/env python3
 import os, sys, requests, openai
 from datetime import datetime, timezone, date
-from textwrap import wrap
-from time import sleep
 
 openai.api_key = os.getenv("OPENAI_KEY")
-TG_TOKEN       = os.getenv("TG_TOKEN")
-CHANNEL_ID     = os.getenv("CHANNEL_ID")
+TG_TOKEN  = os.getenv("TG_TOKEN")
+CHAT_ID   = os.getenv("CHANNEL_ID")   # @name или -100…
 
-MODEL       = "gpt-4o-mini"
-TIMEOUT     = 60
-TG_LIMIT    = 4096          # технический лимит Telegram
-GPT_TOKENS  = 400           # ~1 600–1 800 символов
+MODEL      = "gpt-4o-mini"
+TIMEOUT    = 60
+GPT_TOKENS = 450          # ≈ 1800-2000 символов
+CUT_LEN    = 3500         # надёжно < 4096
 
-PROMPT = """
-📈 Утренний обзор • {date}
+PROMPT = f"""
+📈 Утренний обзор • {{date}}
 
 Индексы 📊
 • S&P 500, DAX, Nikkei, Nasdaq fut
 → Что это значит для инвестора?
 
 Акции-лидеры 🚀 / Аутсайдеры 📉
-• по 2–3 бумаги + причина
-→ Вывод.
+• по 2–3 бумаги + причина → вывод
 
 Крипта ₿
-• BTC, ETH + 3 альткоина
-→ Вывод.
+• BTC, ETH + 3 альткоина → вывод
 
 Макро-новости 📰
-• 3 главных заголовка + влияние
+• 3 заголовка + влияние
 
 Цитаты дня 🗣
 • до 2 цитат + смысл
 
 Число-факт 🤔
 
-⚡️ Идея дня – 2 предложения actionable-совета.
+⚡️ Идея дня — 2 предложения совета
 
-‼️ Только обычный текст, без HTML. Максимум 1 600 символов.
+‼️ Только обычный текст, без HTML/Markdown. ≤ 2 000 символов.
 """
 
-def log(msg):
-    print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC] {msg}", flush=True)
+TG_URL = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
 
-def gpt_report():
-    r = openai.ChatCompletion.create(
+def log(msg):
+    print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+def gpt():
+    txt = openai.ChatCompletion.create(
         model=MODEL,
         messages=[{"role": "user", "content": PROMPT.format(date=date.today())}],
         timeout=TIMEOUT,
         temperature=0.4,
-        max_tokens=GPT_TOKENS,
-    )
-    return r.choices[0].message.content.strip()
+        max_tokens=GPT_TOKENS).choices[0].message.content.strip()
+    return txt
 
-def chunk(text, limit=TG_LIMIT):
-    parts = wrap(text, width=limit-20, break_long_words=False, break_on_hyphens=False)
+def chunks(text, size=CUT_LEN):
+    parts = [text[i:i+size] for i in range(0, len(text), size)]
+    if len(parts) == 1:                      # всё влезло
+        return parts
     total = len(parts)
-    return [f"({i+1}/{total})\n{p}" if total > 1 else p for i, p in enumerate(parts)]
+    return [f"({n+1}/{total})\n{p}" for n, p in enumerate(parts)]
 
-def send(text):
-    for part in chunk(text):
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": CHANNEL_ID, "text": part, "disable_web_page_preview": True},
-            timeout=10
-        )
-        if r.status_code != 200:
-            log(f"TG error {r.status_code}: {r.text}")
-        sleep(1)
+def send(msg):
+    r = requests.post(TG_URL, json={
+        "chat_id": CHAT_ID,
+        "text": msg,
+        "disable_web_page_preview": True})
+    if r.status_code != 200:
+        log(f"TG {r.status_code}: {r.text}")
 
 def main():
     try:
-        send(gpt_report())
+        for part in chunks(gpt()):
+            send(part)
         log("Posted OK.")
     except Exception as e:
         log(f"Fatal: {e}")
@@ -81,8 +78,5 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-if __name__ == "__main__":
-    main()
 
 
