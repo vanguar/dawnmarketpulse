@@ -36,15 +36,15 @@ TIMEOUT        = 60
 MAX_TG_LEN     = 4096
 
 USER_PROMPT = (
-    "Morning market report for {date}.\n"
-    "Include:\n"
-    "• Overnight performance of key equity indices (S&P 500 futures, DAX, Nikkei).\n"
-    "• Biggest stock movers (top gainers / losers).\n"
-    "• Bitcoin, Ethereum and top-5 altcoins moves.\n"
-    "• Major macro headlines likely to move markets today.\n"
-    "• Short quotes or tweets from influential figures (e.g. Elon Musk, Sam Altman, Fed officials) with a one-line interpretation.\n"
-    "• Finish with one quirky “food-for-thought” stat.\n\n"
-    "Output as a concise Markdown bulletin, max 400 words."
+    "Утренний обзор рынков на {date} (пиши по-русски).\n"
+    "Включи:\n"
+    "• Как закрылись основные индексы (S&P 500 фьючерсы, DAX, Nikkei и т.д.).\n"
+    "• Топ-движения акций (основные рост / падение).\n"
+    "• Изменения Bitcoin, Ethereum и пяти крупнейших альткоинов.\n"
+    "• Ключевые макро-новости, способные повлиять на рынок сегодня.\n"
+    "• Короткие цитаты/твиты влиятельных фигур (например, Илон Маск, Сэм Олтман, чиновники ФРС) плюс одно-строчная интерпретация.\n"
+    "• Заверши одним «числом-фактом» для размышлений.\n\n"
+    "Выводи сжатым Markdown-бюллетенем, ≤ 400 слов."
 )
 
 # ─── helpers ───
