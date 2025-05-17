@@ -7,48 +7,50 @@ from datetime import datetime, timezone, date
 from textwrap import wrap
 from time import sleep
 import traceback
+import re
 
-# Загружаем ключи и настройки из переменных окружения
+# Загружаем переменные окружения
 openai.api_key = os.getenv("OPENAI_KEY")
-TG_TOKEN       = os.getenv("TG_TOKEN")
-CHANNEL_ID     = os.getenv("CHANNEL_ID")
+TG_TOKEN = os.getenv("TG_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# Настройки модели и Telegram
+# Настройки
 MODEL       = "gpt-4o-mini"
 TIMEOUT     = 60
-TG_LIMIT    = 4096      # Максимум символов в одном сообщении Telegram
-GPT_TOKENS  = 400       # Примерно 1600–1800 символов
+TG_LIMIT    = 4096
+GPT_TOKENS  = 400
 
-# Промпт, который отправляется в GPT каждый день
-PROMPT = """
-📈 Утренний обзор • {date}
+# Промпт + указание сохранять форматирование
+PROMPT = """📈 Утренний обзор • {date}
 
 Индексы 📊
-• S&P 500, DAX, Nikkei, Nasdaq fut
+- S&P 500, DAX, Nikkei, Nasdaq fut
 → Что это значит для инвестора?
 
 Акции-лидеры 🚀 / Аутсайдеры 📉
-• по 2–3 бумаги + причина
+- по 2–3 бумаги + причина
 → Вывод.
 
 Крипта ₿
-• BTC, ETH + 3 альткоина
+- BTC, ETH + 3 альткоина
 → Вывод.
 
 Макро-новости 📰
-• 3 главных заголовка + влияние
+- 3 главных заголовка + влияние
 
 Цитаты дня 🗣
-• до 2 цитат + смысл
+- до 2 цитат + смысл
 
 Число-факт 🤔
 
 ⚡️ Идея дня – 2 предложения actionable-совета.
 
-‼️ Только обычный текст, без HTML. Максимум 1 600 символов.
+‼️ Только обычный текст, без HTML.
+‼️ Структурируй текст с ДВОЙНЫМИ переносами строк между абзацами.
+‼️ Используй эмодзи перед заголовками разделов.
 """
 
-# Функция логирования — пишет в консоль и дублирует сообщение в Telegram
+
 def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
@@ -56,13 +58,12 @@ def log(msg):
         try:
             requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": CHANNEL_ID, "text": f"🛠 {msg}"},
+                json={"chat_id": CHANNEL_ID, "text": f"🛠 {timestamp} - {msg}"},
                 timeout=5
             )
         except Exception as e:
             print(f"{timestamp} ❗ Ошибка логирования в Телеграм: {e}", flush=True)
 
-# Генерация текста GPT
 def gpt_report():
     r = openai.ChatCompletion.create(
         model=MODEL,
@@ -73,37 +74,48 @@ def gpt_report():
     )
     return r.choices[0].message.content.strip()
 
-# Разбиваем длинный текст на части для Telegram
+def prepare_text(text):
+    for marker in ["📊", "🚀", "📉", "₿", "📰", "🗣", "🤔", "⚡️"]:
+        text = re.sub(f"({marker}[^\n]+)\n", f"\1\n\n", text)
+    text = re.sub(r"\n→", "\n\n→", text)
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text
+
 def chunk(text, limit=TG_LIMIT):
     parts = wrap(text, width=limit-20, break_long_words=False, break_on_hyphens=False)
     total = len(parts)
     return [f"({i+1}/{total})\n{p}" if total > 1 else p for i, p in enumerate(parts)]
 
-# Отправка текста в Telegram
 def send(text):
+    text = prepare_text(text)
     for part in chunk(text):
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": CHANNEL_ID, "text": part, "disable_web_page_preview": True},
-            timeout=10
-        )
-        if r.status_code != 200:
-            log(f"❗ Ошибка отправки в TG: {r.status_code}: {r.text}")
-        sleep(1)  # небольшая пауза между частями
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                json={"chat_id": CHANNEL_ID, "text": part, "disable_web_page_preview": True},
+                timeout=10
+            )
+            if r.status_code != 200:
+                log(f"❗ Ошибка отправки в TG: {r.status_code}: {r.text}")
+            else:
+                log(f"✅ Часть сообщения успешно отправлена ({len(part)} символов)")
+        except Exception as e:
+            log(f"❗ Ошибка при отправке: {e}")
+        sleep(1)
 
-# Главная точка запуска
 def main():
-    log("Скрипт Railway по расписанию запущен.")
+    log("🚀 Railway запустил скрипт по расписанию.")
     try:
         report = gpt_report()
+        log(f"📝 Сгенерирован отчёт ({len(report)} символов)")
         send(report)
-        log("✅ Пост успешно опубликован.")
+        log("✅ Отчёт успешно отправлен в Telegram.")
     except Exception as e:
         log(f"❌ Ошибка выполнения: {e}")
         log(traceback.format_exc())
         sys.exit(1)
 
-# Запуск только при запуске скрипта напрямую
 if __name__ == "__main__":
     main()
 
