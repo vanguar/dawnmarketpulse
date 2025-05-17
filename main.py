@@ -4,7 +4,6 @@ import sys
 import requests
 import openai
 from datetime import datetime, timezone, date
-from textwrap import wrap
 from time import sleep
 import traceback
 import re
@@ -20,7 +19,7 @@ TIMEOUT     = 60
 TG_LIMIT    = 4096
 GPT_TOKENS  = 400
 
-# Промпт + указание сохранять форматирование
+# Промпт
 PROMPT = """📈 Утренний обзор • {date}
 
 Индексы 📊
@@ -83,9 +82,19 @@ def prepare_text(text):
     return text
 
 def chunk(text, limit=TG_LIMIT):
-    parts = wrap(text, width=limit-20, break_long_words=False, break_on_hyphens=False)
-    total = len(parts)
-    return [f"({i+1}/{total})\n{p}" if total > 1 else p for i, p in enumerate(parts)]
+    # Сохраняем переносы строк как есть и делим по абзацам
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current = ""
+    for para in paragraphs:
+        if len(current) + len(para) + 2 <= limit:
+            current += (para + "\n\n")
+        else:
+            chunks.append(current.strip())
+            current = para + "\n\n"
+    if current:
+        chunks.append(current.strip())
+    return chunks
 
 def send(text):
     text = prepare_text(text)
@@ -118,5 +127,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
