@@ -14,7 +14,7 @@ import re
 
 # Подключаем внешний модуль
 from market_reader import get_market_data_text
-from tweets_reader import get_tweet_digest
+# from tweets_reader import get_tweet_digest   # Временно отключено
 from news_reader import get_news_block
 from analyzer import keyword_alert, store_and_compare
 from report_utils import generate_pdf, analyze_sentiment
@@ -66,7 +66,8 @@ def log(msg):
 
 def gpt_report():
     dynamic_data = get_market_data_text()
-    prompt = dynamic_data + "\n\n" + get_tweet_digest() + "\n\n" + get_news_block() + "\n\n" + GPT_CONTINUATION
+    # Убрали get_tweet_digest()
+    prompt = dynamic_data + "\n\n" + get_news_block() + "\n\n" + GPT_CONTINUATION
     r = openai.ChatCompletion.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -134,3 +135,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
