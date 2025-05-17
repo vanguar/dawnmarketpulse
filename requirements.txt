@@ -1,6 +1,5 @@
 openai==0.28.1
 requests==2.31.0
 python-dotenv==1.0.1
-snscrape
 textblob==0.17.1
-fpdf==1.7.2
+nltk
