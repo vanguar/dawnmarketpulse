@@ -11,7 +11,7 @@ def get_market_data_text():
         tickers = {
             "S&P 500": "SPY",
             "DAX": "DAX",
-            "NASDAQ": "IXIC"
+            "NASDAQ": "QQQ"
         }
 
         for name, symbol in tickers.items():
