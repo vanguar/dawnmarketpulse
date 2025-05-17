@@ -55,15 +55,6 @@ GPT_CONTINUATION = """
 def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
-    if TG_TOKEN and CHANNEL_ID:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": CHANNEL_ID, "text": f"🛠 {timestamp} - {msg}"},
-                timeout=5
-            )
-        except Exception as e:
-            print(f"{timestamp} ❗ Ошибка логирования в Телеграм: {e}", flush=True)
 
 def gpt_report():
     dynamic_data = (
