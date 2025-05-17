@@ -1,38 +1,37 @@
-import os
-from datetime import datetime
 from fpdf import FPDF
-from textblob import TextBlob
+import os
 
-def generate_pdf(text, output_dir="reports"):
-    os.makedirs(output_dir, exist_ok=True)
-    today = datetime.today().strftime("%Y-%m-%d")
-    filename = os.path.join(output_dir, f"report_{today}.pdf")
-
+def generate_pdf(text, filename="report.pdf"):
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
 
-    for line in text.splitlines():
+    # Добавляем шрифт с поддержкой Unicode
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if not os.path.isfile(font_path):
+        raise FileNotFoundError(f"Не найден шрифт для Unicode: {font_path}")
+
+    pdf.add_font("DejaVu", "", font_path, uni=True)
+    pdf.set_font("DejaVu", size=12)
+
+    # Добавляем строки текста
+    for line in text.split("\n"):
         pdf.multi_cell(0, 10, line)
 
     pdf.output(filename)
     return filename
 
 def analyze_sentiment(text):
-    blob = TextBlob(text)
-    polarity = blob.sentiment.polarity
-    subjectivity = blob.sentiment.subjectivity
+    # Простейший заглушка-анализ
+    positive_words = ["рост", "успех", "рекорд", "прибыль"]
+    negative_words = ["падение", "убыток", "кризис", "обвал"]
 
-    if polarity > 0.2:
-        tone = "📈 Оптимистичный"
-    elif polarity < -0.2:
-        tone = "📉 Негативный"
+    pos = sum(word in text.lower() for word in positive_words)
+    neg = sum(word in text.lower() for word in negative_words)
+
+    if pos > neg:
+        return "📈 Общий тон отчёта: положительный."
+    elif neg > pos:
+        return "📉 Общий тон отчёта: негативный."
     else:
-        tone = "📊 Нейтральный"
+        return "⚖️ Общий тон отчёта: нейтральный."
 
-    return f"""🧠 Анализ тональности:
-• Настроение: {tone}
-• Полярность: {polarity:.2f}
-• Субъективность: {subjectivity:.2f}
-"""
