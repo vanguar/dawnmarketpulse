@@ -1,33 +1,37 @@
+#!/usr/bin/env python3
 import nltk
 nltk.download('punkt')
 nltk.download('wordnet')
 nltk.download('averaged_perceptron_tagger')
 
-#!/usr/bin/env python3
 import os
 import sys
 import requests
 import openai
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from time import sleep
 import traceback
 import re
 
+# Подключаем внешний модуль
 from market_reader import get_market_data_text, get_crypto_data
+# from tweets_reader import get_tweet_digest   # Временно отключено
 from news_reader import get_news_block
 from analyzer import keyword_alert, store_and_compare
 from report_utils import analyze_sentiment  # generate_pdf удалён
 
-# Переменные окружения
+# Загружаем переменные окружения
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN = os.getenv("TG_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-MODEL = "gpt-4o-mini"
-TIMEOUT = 60
-TG_LIMIT = 4096
-GPT_TOKENS = 400
+# Настройки
+MODEL       = "gpt-4o-mini"
+TIMEOUT     = 60
+TG_LIMIT    = 4096
+GPT_TOKENS  = 400
 
+# Хвост промпта после данных
 GPT_CONTINUATION = """
 Акции-лидеры 🚀 / Аутсайдеры 📉
 - по 2–3 бумаги + причина
@@ -133,4 +137,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
