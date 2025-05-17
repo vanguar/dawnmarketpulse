@@ -19,7 +19,6 @@ def keyword_alert(text):
             findings.append(f"• {word}: {reaction}")
     if findings:
         return '🔺 Обнаружены ключевые сигналы:\n' + "\n".join(findings)
-" + "\n".join(findings)
     else:
         return "🟢 Ключевых тревожных сигналов не найдено."
 
