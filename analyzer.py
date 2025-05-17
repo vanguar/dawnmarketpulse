@@ -40,8 +40,7 @@ def store_and_compare(report_text, cache_dir="cache"):
     if os.path.exists(yesterday_file):
         with open(yesterday_file, "r", encoding="utf-8") as f:
             previous = f.read()
-        return '📊 Сравнение с вчерашним отчётом:\n' + diff
-{compare_reports(previous, report_text)}"
+        return '📊 Сравнение с вчерашним отчётом:\n' + compare_reports(previous, report_text)
     else:
         return "📊 Данных за вчера нет для сравнения."
 
