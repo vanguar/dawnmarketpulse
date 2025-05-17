@@ -61,3 +61,4 @@ def get_crypto_data():
         return f"₿ Крипта\nОшибка при получении данных: {e}"
 
 
+
