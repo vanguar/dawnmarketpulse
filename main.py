@@ -13,27 +13,21 @@ from time import sleep
 import traceback
 import re
 
-# Подключаем внешний модуль
 from market_reader import get_market_data_text, get_crypto_data
-# from tweets_reader import get_tweet_digest   # Временно отключено
 from news_reader import get_news_block
 from analyzer import keyword_alert, store_and_compare
-from report_utils import analyze_sentiment  # generate_pdf удалён
+from report_utils import analyze_sentiment
 
-# Загружаем переменные окружения
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN = os.getenv("TG_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# Настройки
 MODEL       = "gpt-4o-mini"
 TIMEOUT     = 60
 TG_LIMIT    = 4096
 GPT_TOKENS  = 400
 
-# Хвост промпта после данных
-GPT_CONTINUATION = """
-Акции-лидеры 🚀 / Аутсайдеры 📉
+GPT_CONTINUATION = """Акции-лидеры 🚀 / Аутсайдеры 📉
 - по 2–3 бумаги + причина
 → Вывод.
 
@@ -49,17 +43,19 @@ GPT_CONTINUATION = """
 
 ‼️ Только обычный текст, без HTML.
 ‼️ Структурируй текст с ДВОЙНЫМИ переносами строк между абзацами.
-‼️ Используй эмодзи перед заголовками разделов.
-"""
+‼️ Используй эмодзи перед заголовками разделов."""
 
 def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
 
 def gpt_report():
+    today = date.today().strftime("%d.%m.%Y")
+    header = f"📅 Актуальные рыночные новости на {today}"
     dynamic_data = (
+        header + "\n\n" +
         get_market_data_text() + "\n\n" +
-        get_crypto_data() + "\n\n" +
+        get_crypto_data(extended=True) + "\n\n" +
         get_news_block() + "\n\n" +
         GPT_CONTINUATION
     )
