@@ -1,5 +1,6 @@
 import os
 import requests
+from datetime import date
 
 ALPHA_KEY = os.getenv("ALPHA_KEY")
 
@@ -10,7 +11,8 @@ def get_market_data_text():
             "DAX": "DAX",
             "NASDAQ": "QQQ"
         }
-        result = ["📊 Индексы"]
+        today = date.today().strftime("%d.%m.%Y")
+        result = [f"📊 Индексы на {today}"]
         for name, symbol in tickers.items():
             url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHA_KEY}"
             r = requests.get(url, timeout=10)
@@ -20,18 +22,19 @@ def get_market_data_text():
                 continue
             price = float(data["Global Quote"]["05. price"])
             change = float(data["Global Quote"]["10. change percent"].strip('%'))
-            result.append(f"{name}: ${price:,.0f} ({change:+.1f}%)")
+            result.append(f"{name}: ${price:,.0f} ({change:+.2f}%)")
         return "\n".join(result)
     except Exception as e:
         return f"📊 Ошибка при получении индексов: {e}"
 
 def get_crypto_data(extended=False):
     try:
+        today = date.today().strftime("%d.%m.%Y")
         symbols = {
             "BTC": "BTCUSDT",
             "ETH": "ETHUSDT"
         }
-        result = ["₿ Крипта"]
+        result = [f"₿ Крипта на {today}"]
         insights = []
 
         for name, pair in symbols.items():
@@ -41,7 +44,7 @@ def get_crypto_data(extended=False):
             price = float(data["lastPrice"])
             change = float(data["priceChangePercent"])
             emoji = "📈" if change > 0 else "📉"
-            result.append(f"{emoji} {name}: ${price:,.0f} ({change:+.1f}%)")
+            result.append(f"{emoji} {name}: ${price:,.0f} ({change:+.2f}%)")
 
             if extended:
                 if abs(change) > 3:
