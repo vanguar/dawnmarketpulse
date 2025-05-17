@@ -8,6 +8,13 @@ from time import sleep
 import traceback
 import re
 
+# Подключаем внешний модуль
+from market_reader import get_market_data_text
+from tweets_reader import get_tweet_digest
+from news_reader import get_news_block
+from analyzer import keyword_alert, store_and_compare
+from report_utils import generate_pdf, analyze_sentiment
+
 # Загружаем переменные окружения
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN = os.getenv("TG_TOKEN")
@@ -19,19 +26,10 @@ TIMEOUT     = 60
 TG_LIMIT    = 4096
 GPT_TOKENS  = 400
 
-# Промпт
-PROMPT = """📈 Утренний обзор • {date}
-
-Индексы 📊
-- S&P 500, DAX, Nikkei, Nasdaq fut
-→ Что это значит для инвестора?
-
+# Хвост промпта после данных
+GPT_CONTINUATION = """
 Акции-лидеры 🚀 / Аутсайдеры 📉
 - по 2–3 бумаги + причина
-→ Вывод.
-
-Крипта ₿
-- BTC, ETH + 3 альткоина
 → Вывод.
 
 Макро-новости 📰
@@ -49,7 +47,6 @@ PROMPT = """📈 Утренний обзор • {date}
 ‼️ Используй эмодзи перед заголовками разделов.
 """
 
-
 def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
@@ -64,9 +61,11 @@ def log(msg):
             print(f"{timestamp} ❗ Ошибка логирования в Телеграм: {e}", flush=True)
 
 def gpt_report():
+    dynamic_data = get_market_data_text()
+    prompt = dynamic_data + "\n\n" + get_tweet_digest() + "\n\n" + get_news_block() + "\n\n" + GPT_CONTINUATION
     r = openai.ChatCompletion.create(
         model=MODEL,
-        messages=[{"role": "user", "content": PROMPT.format(date=date.today())}],
+        messages=[{"role": "user", "content": prompt}],
         timeout=TIMEOUT,
         temperature=0.4,
         max_tokens=GPT_TOKENS,
@@ -82,7 +81,6 @@ def prepare_text(text):
     return text
 
 def chunk(text, limit=TG_LIMIT):
-    # Сохраняем переносы строк как есть и делим по абзацам
     paragraphs = text.split("\n\n")
     chunks = []
     current = ""
@@ -119,6 +117,11 @@ def main():
         report = gpt_report()
         log(f"📝 Сгенерирован отчёт ({len(report)} символов)")
         send(report)
+        send(keyword_alert(report))
+        send(store_and_compare(report))
+        send(analyze_sentiment(report))
+        pdf_path = generate_pdf(report)
+        log(f'📄 PDF отчёт сохранён: {pdf_path}')
         log("✅ Отчёт успешно отправлен в Telegram.")
     except Exception as e:
         log(f"❌ Ошибка выполнения: {e}")
@@ -127,7 +130,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
