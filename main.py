@@ -17,7 +17,7 @@ from market_reader import get_market_data_text
 # from tweets_reader import get_tweet_digest   # Временно отключено
 from news_reader import get_news_block
 from analyzer import keyword_alert, store_and_compare
-from report_utils import generate_pdf, analyze_sentiment
+from report_utils import analyze_sentiment  # Убрали generate_pdf
 
 # Загружаем переменные окружения
 openai.api_key = os.getenv("OPENAI_KEY")
@@ -66,7 +66,6 @@ def log(msg):
 
 def gpt_report():
     dynamic_data = get_market_data_text()
-    # Убрали get_tweet_digest()
     prompt = dynamic_data + "\n\n" + get_news_block() + "\n\n" + GPT_CONTINUATION
     r = openai.ChatCompletion.create(
         model=MODEL,
@@ -125,8 +124,6 @@ def main():
         send(keyword_alert(report))
         send(store_and_compare(report))
         send(analyze_sentiment(report))
-        pdf_path = generate_pdf(report)
-        log(f'📄 PDF отчёт сохранён: {pdf_path}')
         log("✅ Отчёт успешно отправлен в Telegram.")
     except Exception as e:
         log(f"❌ Ошибка выполнения: {e}")
