@@ -18,8 +18,10 @@ def keyword_alert(text):
         if pattern.search(text):
             findings.append(f"• {word}: {reaction}")
     if findings:
-        return "⚡️ Обнаружены ключевые сигналы:
-" + "\n".join(findings)
+        # Исправлено: Строка заголовка, \n уже включен.
+        header_text = "⚡️ Обнаружены ключевые сигналы:\n"
+        # Соединяем с найденными элементами, разделенными переносами строк.
+        return header_text + "\n".join(findings)
     else:
         return "🟢 Ключевых тревожных сигналов не найдено."
 
@@ -41,8 +43,8 @@ def store_and_compare(report_text, cache_dir="cache"):
     if os.path.exists(yesterday_file):
         with open(yesterday_file, "r", encoding="utf-8") as f:
             previous = f.read()
-        return f"📊 Сравнение с вчерашним отчётом:
-{compare_reports(previous, report_text)}"
+        # Исправлено: добавил \n для разделения заголовка и результатов сравнения
+        return f"📊 Сравнение с вчерашним отчётом:\n{compare_reports(previous, report_text)}"
     else:
         return "📊 Данных за вчера нет для сравнения."
 
@@ -54,8 +56,8 @@ def compare_reports(old, new):
     result = []
     if added:
         result.append("➕ Новые строки:")
-        result.extend(["  " + line for line in added])
+        result.extend(["  " + line for line in added]) # Оставил двойной пробел для отступа
     if removed:
         result.append("➖ Удалено:")
-        result.extend(["  " + line for line in removed])
+        result.extend(["  " + line for line in removed]) # Оставил двойной пробел для отступа
     return "\n".join(result) if result else "Изменений нет."
