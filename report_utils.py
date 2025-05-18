@@ -1,38 +1,60 @@
 import os
-from datetime import datetime
-#from fpdf import FPDF
+# from fpdf import FPDF # Убрали, так как PDF не нужен
 from textblob import TextBlob
+from datetime import datetime # Добавили для функции, если будете использовать дату
 
-def generate_pdf(text, output_dir="reports"):
-    os.makedirs(output_dir, exist_ok=True)
-    today = datetime.today().strftime("%Y-%m-%d")
-    filename = os.path.join(output_dir, f"report_{today}.pdf")
+# Если generate_pdf не используется, ее можно полностью удалить.
+# def generate_pdf(text, output_dir="reports"):
+#     # ... (код функции)
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
+def get_sentiment_description(polarity, subjectivity):
+    """Возвращает текстовое описание полярности и субъективности."""
+    
+    pol_desc = "нейтральная" # По умолчанию
+    if polarity > 0.5:
+        pol_desc = "очень позитивная"
+    elif polarity > 0.15: # Немного поднял порог для "позитивная"
+        pol_desc = "умеренно позитивная"
+    elif polarity < -0.5:
+        pol_desc = "очень негативная"
+    elif polarity < -0.15: # Немного поднял порог для "негативная"
+        pol_desc = "умеренно негативная"
 
-    for line in text.splitlines():
-        pdf.multi_cell(0, 10, line)
+    sub_desc = "преимущественно объективный (фокус на фактах)" # По умолчанию
+    if subjectivity > 0.75: # Увеличил порог для "очень субъективный"
+        sub_desc = "очень субъективный (много личных мнений/эмоций)"
+    elif subjectivity > 0.45: # Увеличил порог для "умеренно субъективный"
+        sub_desc = "умеренно субъективный (присутствуют личные оценки)"
+            
+    return f"Тональность текста: {pol_desc}. Стиль изложения: {sub_desc}."
 
-    pdf.output(filename)
-    return filename
 
 def analyze_sentiment(text):
-    blob = TextBlob(text)
-    polarity = blob.sentiment.polarity
-    subjectivity = blob.sentiment.subjectivity
+    """Анализирует тональность текста и возвращает форматированную строку с результатами и расшифровкой."""
+    if not isinstance(text, str) or not text.strip():
+        return """🧠 Анализ тональности текста GPT:
+        • Ошибка: Текст для анализа не предоставлен или пуст."""
 
-    if polarity > 0.2:
-        tone = "📈 Оптимистичный"
-    elif polarity < -0.2:
-        tone = "📉 Негативный"
-    else:
-        tone = "📊 Нейтральный"
+    try:
+        blob = TextBlob(text)
+        polarity = blob.sentiment.polarity
+        subjectivity = blob.sentiment.subjectivity
 
-    return f"""🧠 Анализ тональности:
-• Настроение: {tone}
-• Полярность: {polarity:.2f}
-• Субъективность: {subjectivity:.2f}
-"""
+        tone = "📊 Нейтральное" # По умолчанию
+        if polarity > 0.15:
+            tone = "📈 Позитивное"
+        elif polarity < -0.15:
+            tone = "📉 Негативное"
+        
+        sentiment_details_text = get_sentiment_description(polarity, subjectivity)
+
+        return f"""🧠 Анализ тональности текста GPT:
+• Настроение (общее): {tone}
+• Полярность (от -1 до 1): {polarity:.2f}
+• Субъективность (от 0 до 1): {subjectivity:.2f}
+• Расшифровка: {sentiment_details_text}"""
+    except Exception as e:
+        # Логирование ошибки здесь было бы полезно, если бы была передана функция log
+        # print(f"Ошибка в analyze_sentiment: {e}") 
+        return """🧠 Анализ тональности текста GPT:
+        • Ошибка при анализе тональности."""
