@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from fpdf import FPDF
+#from fpdf import FPDF
 from textblob import TextBlob
 
 def generate_pdf(text, output_dir="reports"):
