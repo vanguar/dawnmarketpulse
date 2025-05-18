@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import nltk
+# Используем quiet=True, чтобы не было лишних сообщений в логах при каждом запуске
 nltk.download('punkt', quiet=True)
 nltk.download('wordnet', quiet=True)
 nltk.download('averaged_perceptron_tagger', quiet=True)
@@ -13,6 +14,7 @@ from time import sleep
 import traceback
 import re
 
+# Предполагается, что эти модули находятся в том же каталоге или доступны через PYTHONPATH
 from market_reader import get_market_data_text, get_crypto_data
 from news_reader import get_news_block
 from analyzer import keyword_alert, store_and_compare
@@ -25,7 +27,9 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 MODEL = "gpt-4o-mini"
 TIMEOUT = 60  # Таймаут для API запросов (например, OpenAI)
-TG_LIMIT_BYTES = 3800  # Байтовый лимит для ТЕКСТА одного сообщения (без префикса)
+# Устанавливаем байтовый лимит для ТЕКСТА ОДНОГО сообщения (без префикса "Часть X/Y")
+# Это значение можно будет уменьшать, если обрезка продолжится.
+TG_LIMIT_BYTES = 3700 # Попробуем уменьшить еще немного для большего запаса
 GPT_TOKENS = 400 # Максимальное количество токенов для ответа от GPT
 
 GPT_CONTINUATION = """Акции-лидеры 🚀 / Аутсайдеры 📉
@@ -56,8 +60,17 @@ def safe_call(func, retries=3, delay=5, label="❗ Ошибка"):
     for i in range(retries):
         try:
             return func()
+        except requests.exceptions.Timeout:
+            log(f"{label}: попытка {i + 1}/{retries} не удалась - Таймаут ({TIMEOUT}с)")
+            if i < retries - 1:
+                sleep(delay)
+        except requests.exceptions.RequestException as e: # Более общая ошибка сети
+            log(f"{label}: попытка {i + 1}/{retries} не удалась - Ошибка сети: {e}")
+            if i < retries - 1:
+                sleep(delay)
         except Exception as e:
-            log(f"{label}: попытка {i + 1}/{retries} не удалась: {e}")
+            log(f"{label}: попытка {i + 1}/{retries} не удалась - Общая ошибка: {e}")
+            log(traceback.format_exc()) # Логируем полный traceback для неожиданных ошибок
             if i < retries - 1:
                 sleep(delay)
     log(f"{label}: все {retries} попытки провалены.")
@@ -69,27 +82,25 @@ def gpt_report():
     today = date.today().strftime("%d.%m.%Y")
     header = f"📅 Актуальные рыночные новости на {today}"
     
-    # Собираем данные от всех модулей
     market_data_text = get_market_data_text()
     crypto_data_text = get_crypto_data(extended=True)
-    news_block_text = get_news_block()
+    news_block_text = get_news_block() # get_news_block уже включает заголовок и промпт для GPT
 
     dynamic_data = (
         f"{header}\n\n"
         f"{market_data_text}\n\n"
         f"{crypto_data_text}\n\n"
-        f"{news_block_text}\n\n" # get_news_block УЖЕ содержит свой заголовок и GPT_CONTINUATION для новостей
-        f"{GPT_CONTINUATION}" # Это общий GPT_CONTINUATION для других секций, если они будут
+        f"{news_block_text}\n\n" 
+        f"{GPT_CONTINUATION}" 
     )
     
-    log(f"ℹ️ Данные для GPT (первые 300 симв): {dynamic_data[:300]}...")
-    log(f"ℹ️ Общая длина данных для GPT: {len(dynamic_data)} символов")
+    log(f"ℹ️ Данные для GPT (длина): {len(dynamic_data)} символов. Первые 200: {dynamic_data[:200]}...")
 
     response = safe_call(
         lambda: openai.ChatCompletion.create(
             model=MODEL,
             messages=[{"role": "user", "content": dynamic_data}],
-            timeout=TIMEOUT,
+            timeout=TIMEOUT, # Таймаут для запроса к OpenAI
             temperature=0.4,
             max_tokens=GPT_TOKENS,
         ),
@@ -104,201 +115,205 @@ def gpt_report():
 
 # --- Обработка и отправка текста в Telegram ---
 
-def prepare_text(text):
-    # Убедимся, что после заголовков с эмодзи всегда два переноса строки
-    for marker in ["📊", "🚀", "📉", "₿", "📰", "🗣", "🤔", "⚡️", "🔍", "📈", "🧠"]: # Добавил маркеры из main
-        text = re.sub(f"({marker}[^\n]+)\n(?!\n)", r"\1\n\n", text)
-    # Убедимся, что после стрелочки "→" всегда два переноса строки
-    text = re.sub(r"\n→", "\n\n→", text)
-    # Убираем тройные и более переносы строк
-    while "\n\n\n" in text:
-        text = text.replace("\n\n\n", "\n\n")
-    return text.strip()
+def prepare_text(text_to_prepare):
+    if not isinstance(text_to_prepare, str): # Добавим проверку типа
+        log(f"⚠️ prepare_text получил не строку: {type(text_to_prepare)}. Возвращаю как есть.")
+        return str(text_to_prepare) # Пытаемся преобразовать в строку на всякий случай
+
+    for marker in ["📊", "🚀", "📉", "₿", "📰", "🗣", "🤔", "⚡️", "🔍", "📈", "🧠"]:
+        text_to_prepare = re.sub(f"({marker}[^\n]*)\n(?!\n)", r"\1\n\n", text_to_prepare)
+    
+    text_to_prepare = re.sub(r"(\n→[^\n]*)\n(?!\n)", r"\1\n\n", text_to_prepare) 
+    text_to_prepare = re.sub(r"(\n→)$", r"\1\n", text_to_prepare) 
+
+    while "\n\n\n" in text_to_prepare:
+        text_to_prepare = text_to_prepare.replace("\n\n\n", "\n\n")
+    return text_to_prepare.strip()
+
 
 def force_split_long_string(long_str, limit_b):
-    """Безопасно режет длинную строку на части, не превышающие limit_b байт."""
     sub_chunks = []
-    if not long_str:
+    if not long_str: 
         return sub_chunks
     
     encoded_str = long_str.encode('utf-8')
-    start_idx = 0
-    while start_idx < len(encoded_str):
-        end_idx = min(start_idx + limit_b, len(encoded_str))
-        current_byte_slice = encoded_str[start_idx:end_idx]
+    current_byte_pos = 0
+    while current_byte_pos < len(encoded_str):
+        end_byte_pos = min(current_byte_pos + limit_b, len(encoded_str))
+        byte_slice_candidate = encoded_str[current_byte_pos:end_byte_pos]
         
-        # Пытаемся декодировать, отступая по байту назад при ошибке
         while True:
             try:
-                decoded_chunk = current_byte_slice.decode('utf-8')
+                decoded_chunk = byte_slice_candidate.decode('utf-8')
                 sub_chunks.append(decoded_chunk)
-                start_idx += len(current_byte_slice) # Переходим к следующей позиции
+                current_byte_pos += len(byte_slice_candidate) 
                 break 
             except UnicodeDecodeError:
-                if len(current_byte_slice) > 1:
-                    current_byte_slice = current_byte_slice[:-1] # Уменьшаем на 1 байт
+                if len(byte_slice_candidate) > 1:
+                    byte_slice_candidate = byte_slice_candidate[:-1] 
                 else:
-                    # Не удалось декодировать даже 1 байт. Это крайний случай.
-                    # Пропускаем этот байт, чтобы избежать бесконечного цикла.
-                    log(f"⚠️ Пропущен проблемный байт при принудительной нарезке: {encoded_str[start_idx:start_idx+1]!r}")
-                    start_idx += 1
-                    break # Выход из внутреннего while, переход к следующей итерации внешнего
+                    log(f"⚠️ Пропущен не декодируемый байт при принудительной нарезке: {encoded_str[current_byte_pos:current_byte_pos+1]!r}")
+                    current_byte_pos += 1 
+                    break 
     return sub_chunks
 
-def smart_chunk(text_to_split_paragraphs, outer_limit_bytes):
-    """Разбивает текст на чанки с учетом байтового лимита, стараясь сохранять абзацы."""
-    paragraphs = text_to_split_paragraphs.split("\n\n")
-    final_chunks = []
-    current_chunk_text_parts = []
-    current_chunk_accumulated_bytes = 0
 
-    for para_idx, para_str in enumerate(paragraphs):
-        if not para_str.strip(): # Пропускаем пустые абзацы
+def smart_chunk(text_to_chunk, outer_limit_bytes):
+    paragraphs = text_to_chunk.split("\n\n") 
+    final_result_chunks = []
+    current_accumulated_parts = [] 
+    current_accumulated_bytes = 0  
+
+    for para_idx, paragraph_str in enumerate(paragraphs):
+        if not paragraph_str.strip(): 
             continue
 
-        para_bytes = para_str.encode('utf-8')
-        # Байты для разделителя "\n\n" (2 байта), если текущий чанк не пуст
-        separator_bytes_len = 2 if current_chunk_text_parts else 0 
+        paragraph_bytes = paragraph_str.encode('utf-8')
+        separator_bytes_len = 2 if current_accumulated_parts else 0 
 
-        if current_chunk_accumulated_bytes + separator_bytes_len + len(para_bytes) <= outer_limit_bytes:
-            # Абзац помещается в текущий чанк
-            if current_chunk_text_parts: # Добавляем разделитель, если это не первый абзац в чанке
-                current_chunk_text_parts.append("\n\n")
-            current_chunk_text_parts.append(para_str)
-            current_chunk_accumulated_bytes += separator_bytes_len + len(para_bytes)
+        if current_accumulated_bytes + separator_bytes_len + len(paragraph_bytes) <= outer_limit_bytes:
+            if current_accumulated_parts: 
+                current_accumulated_parts.append("\n\n")
+            current_accumulated_parts.append(paragraph_str)
+            current_accumulated_bytes += separator_bytes_len + len(paragraph_bytes)
         else:
-            # Абзац не помещается. Завершаем текущий чанк, если он не пуст.
-            if current_chunk_text_parts:
-                final_chunks.append("".join(current_chunk_text_parts))
-            # Сбрасываем текущий чанк
-            current_chunk_text_parts = []
-            current_chunk_accumulated_bytes = 0
+            if current_accumulated_parts:
+                final_result_chunks.append("".join(current_accumulated_parts))
+            
+            current_accumulated_parts = []
+            current_accumulated_bytes = 0
 
-            # Теперь обрабатываем 'para_str', который не поместился
-            if len(para_bytes) > outer_limit_bytes:
-                # Сам абзац длиннее лимита, его нужно принудительно резать
-                log(f"ℹ️ Абзац #{para_idx} слишком длинный ({len(para_bytes)} байт), будет разрезан.")
-                split_long_paragraph_parts = force_split_long_string(para_str, outer_limit_bytes)
-                final_chunks.extend(split_long_paragraph_parts) # Каждый кусок - новый чанк
+            if len(paragraph_bytes) > outer_limit_bytes:
+                log(f"ℹ️ Абзац #{para_idx} '{paragraph_str[:30].replace(chr(10),' ')}...' слишком длинный ({len(paragraph_bytes)} байт > {outer_limit_bytes} байт), будет разрезан.")
+                split_long_paragraph_sub_chunks = force_split_long_string(paragraph_str, outer_limit_bytes)
+                final_result_chunks.extend(split_long_paragraph_sub_chunks) 
             else:
-                # Абзац не длиннее лимита, но не влез в предыдущий чанк. Начинаем им новый чанк.
-                current_chunk_text_parts.append(para_str)
-                current_chunk_accumulated_bytes = len(para_bytes)
+                current_accumulated_parts.append(paragraph_str)
+                current_accumulated_bytes = len(paragraph_bytes)
                 
-    # Добавляем последний собранный чанк, если он не пуст
-    if current_chunk_text_parts:
-        final_chunks.append("".join(current_chunk_text_parts))
+    if current_accumulated_parts:
+        final_result_chunks.append("".join(current_accumulated_parts))
 
-    return [chunk for chunk in final_chunks if chunk.strip()] # Убираем полностью пустые чанки
+    return [chunk_item for chunk_item in final_result_chunks if chunk_item.strip()]
 
-def send(text_to_send, add_numeration=False):
-    prepared_text = prepare_text(text_to_send)
-    
-    # Запас байт под префикс "Часть XX/YY:\n\n"
-    # "Часть 10/10:\n\n" ~ 15 символов. В UTF-8 это может быть до 15*4=60 байт, но обычно меньше.
-    # Возьмем консервативный запас.
-    prefix_allowance_bytes = 40 
-    
-    text_part_limit_bytes = TG_LIMIT_BYTES
-    if add_numeration:
-        text_part_limit_bytes = TG_LIMIT_BYTES - prefix_allowance_bytes
-    
-    parts = smart_chunk(prepared_text, text_part_limit_bytes)
-    total_parts = len(parts)
 
-    if not parts:
-        log("ℹ️ Нет частей для отправки (текст пуст или состоит только из пробелов).")
+def send(text_content, add_numeration_if_multiple_parts=False):
+    prepared_text_content = prepare_text(str(text_content)) # Добавил str() для большей надежности
+    
+    prefix_max_allowance_bytes = 40 
+    
+    text_chunk_actual_limit_bytes = TG_LIMIT_BYTES 
+    
+    # Сначала делаем предварительную нарезку, чтобы узнать, сколько будет частей
+    # Это нужно для корректного решения, применять ли уменьшенный лимит под префикс.
+    # Если нумерация нужна (т.е. частей будет > 1), то лимит для smart_chunk должен быть меньше.
+    limit_for_pre_chunking = TG_LIMIT_BYTES
+    if add_numeration_if_multiple_parts: # Если в принципе нумерация может понадобиться
+        limit_for_pre_chunking = TG_LIMIT_BYTES - prefix_max_allowance_bytes
+        
+    parts_list = smart_chunk(prepared_text_content, limit_for_pre_chunking)
+    total_parts_count = len(parts_list)
+
+    # Если нумерация должна быть, но частей всего одна, то для этой единственной части
+    # можно использовать полный TG_LIMIT_BYTES, так как префикса "Часть 1/1" не будет.
+    if add_numeration_if_multiple_parts and total_parts_count == 1:
+        parts_list = smart_chunk(prepared_text_content, TG_LIMIT_BYTES) # Перенарезаем с полным лимитом
+        total_parts_count = len(parts_list) # Должно остаться 1, если текст не слишком велик
+
+    if not parts_list:
+        log("ℹ️ Нет частей для отправки (текст пуст или состоит только из пробельных символов).")
         return
 
-    for idx, part_content in enumerate(parts, 1):
-        final_text_to_send = part_content
-        log_message_prefix = "" # Для логов, чтобы было понятно, какая часть
+    for idx, single_part_content in enumerate(parts_list, 1):
+        final_text_for_telegram = single_part_content
+        log_part_prefix = "" 
 
-        if add_numeration and total_parts > 0: # Нумерация только если указано и есть части
-            prefix_str = f"Часть {idx}/{total_parts}:\n\n"
-            final_text_to_send = prefix_str + part_content
-            log_message_prefix = f"Часть {idx}/{total_parts} "
+        # Добавляем нумерацию "Часть X/Y", только если частей БОЛЬШЕ ОДНОЙ и флаг установлен
+        if add_numeration_if_multiple_parts and total_parts_count > 1:
+            numeration_prefix_str = f"Часть {idx}/{total_parts_count}:\n\n"
+            final_text_for_telegram = numeration_prefix_str + single_part_content
+            log_part_prefix = f"Часть {idx}/{total_parts_count} " 
             
-            # Проверка, не превысили ли мы АБСОЛЮТНЫЙ лимит Telegram с префиксом
-            final_text_bytes = len(final_text_to_send.encode('utf-8'))
-            if final_text_bytes > 4096:
-                log(f"📛 ВНИМАНИЕ! {log_message_prefix}С ПРЕФИКСОМ СЛИШКОМ ДЛИННАЯ ({final_text_bytes} байт > 4096). Telegram ОБРЕЖЕТ ЭТУ ЧАСТЬ!")
-                # Можно добавить логику дополнительной обрезки здесь, но это усложнит.
-                # Пока что просто предупреждаем и отправляем.
+            final_text_bytes_with_prefix = len(final_text_for_telegram.encode('utf-8'))
+            if final_text_bytes_with_prefix > 4096:
+                log(f"📛 ВНИМАНИЕ! {log_part_prefix}С ПРЕФИКСОМ СЛИШКОМ ДЛИННАЯ ({final_text_bytes_with_prefix} байт > 4096). Telegram ОБРЕЖЕТ ЭТУ ЧАСТЬ!")
 
-        def send_telegram_request():
+        def make_telegram_api_call():
             return requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": CHANNEL_ID, "text": final_text_to_send, "disable_web_page_preview": True},
-                timeout=10 # Таймаут на один запрос к Telegram
+                json={"chat_id": CHANNEL_ID, "text": final_text_for_telegram, "disable_web_page_preview": True},
+                timeout=15 
             )
 
-        response = safe_call(send_telegram_request, label=f"❗ Ошибка отправки {log_message_prefix}в TG")
+        response_from_tg = safe_call(make_telegram_api_call, label=f"❗ Ошибка отправки {log_part_prefix}в TG")
         
-        if response and response.status_code == 200:
-            log(f"✅ {log_message_prefix}успешно отправлена ({len(final_text_to_send.encode('utf-8'))} байт, {len(final_text_to_send)} символов)")
-        elif response:
-            log(f"❗ Ошибка от Telegram для {log_message_prefix.strip()}: {response.status_code} - {response.text}")
-            log(f"   Текст проблемной части (первые 100 символов): {final_text_to_send[:100].replace(chr(10), ' ')}")
-        else:
-            log(f"❗ Не удалось отправить {log_message_prefix.strip()} (нет ответа от сервера Telegram).")
-            log(f"   Текст проблемной части (первые 100 символов): {final_text_to_send[:100].replace(chr(10), ' ')}")
+        current_part_final_bytes = len(final_text_for_telegram.encode('utf-8'))
+        current_part_final_chars = len(final_text_for_telegram)
 
-        if total_parts > 1 and idx < total_parts: # Пауза между отправкой частей
-            sleep(1.5) # Немного увеличил паузу
+        if response_from_tg and response_from_tg.status_code == 200:
+            log(f"✅ {log_part_prefix}успешно отправлена ({current_part_final_bytes} байт, {current_part_final_chars} символов)")
+        elif response_from_tg:
+            error_text_preview = final_text_for_telegram[:150].replace('\n', ' ') 
+            log(f"❗ Ошибка от Telegram для {log_part_prefix.strip()}: {response_from_tg.status_code} - {response_from_tg.text}")
+            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, символы: {current_part_final_chars}, начало): '{error_text_preview}...'")
+        else: 
+            error_text_preview = final_text_for_telegram[:150].replace('\n', ' ')
+            log(f"❗ Не удалось отправить {log_part_prefix.strip()} (нет ответа от сервера Telegram после всех попыток).")
+            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, символы: {current_part_final_chars}, начало): '{error_text_preview}...'")
+
+        if total_parts_count > 1 and idx < total_parts_count: 
+            sleep_duration = 1.5 
+            log(f"ℹ️ Пауза {sleep_duration} сек. перед следующей частью...")
+            sleep(sleep_duration)
 
 # --- Основная логика скрипта ---
 
 def main():
-    log("🚀 Скрипт запущен.") # Изменил сообщение для ясности
+    log("🚀 Скрипт запущен.")
     try:
-        # 1. Генерируем основной текстовый отчет от GPT
-        main_report_text = gpt_report()
+        main_report_text_from_gpt = gpt_report() 
         
-        # 2. Собираем все компоненты отчета
-        # Важно, чтобы каждая часть из keyword_alert, store_and_compare, analyze_sentiment
-        # уже содержала свои заголовки, если они нужны.
-        
-        report_components = [
-            "📊 Рыночный отчёт",
-            main_report_text.strip(), # Текст от GPT
+        list_of_report_components = [
+            "📊 Рыночный отчёт", 
+            main_report_text_from_gpt, # Уже .strip() из gpt_report()
             
-            keyword_alert(main_report_text).strip(), # Эта функция уже должна возвращать заголовок типа "🔍 Ключевые слова"
+            keyword_alert(main_report_text_from_gpt), 
             
-            store_and_compare(main_report_text).strip(), # Эта функция уже должна возвращать заголовок типа "📈 Сравнение с вчера"
+            store_and_compare(main_report_text_from_gpt), 
             
-            analyze_sentiment(main_report_text).strip() # Эта функция уже должна возвращать заголовок типа "🧠 Анализ тональности"
+            analyze_sentiment(main_report_text_from_gpt) 
         ]
         
-        # Объединяем все компоненты в одну большую строку с двойными переносами
-        full_report_string = "\n\n".join(filter(None, report_components)) # filter(None, ...) уберет пустые строки, если какая-то функция вернула None или ""
+        # Убираем None или пустые строки/строки из пробелов и затем объединяем
+        valid_components = []
+        for component in list_of_report_components:
+            if isinstance(component, str) and component.strip():
+                valid_components.append(component.strip()) # Дополнительно strip() для каждого компонента
+            elif component is not None: # Если не строка, но не None, преобразуем в строку
+                log(f"⚠️ Компонент отчета не является строкой, но не None: {type(component)}. Преобразован в строку.")
+                str_component = str(component).strip()
+                if str_component:
+                    valid_components.append(str_component)
+        
+        full_report_final_string = "\n\n".join(valid_components)
 
-        # 3. Отправляем собранный отчет в Telegram
-        if full_report_string:
-            send(full_report_string, add_numeration=True)
+        if full_report_final_string:
+            send(full_report_final_string, add_numeration_if_multiple_parts=True)
             log("✅ Весь отчёт обработан и отправлен.")
         else:
             log("ℹ️ Итоговый отчет пуст, отправка не требуется.")
 
-    except RuntimeError as e: # Ошибка от OpenAI
-        log(f"❌ Критическая ошибка OpenAI: {e}")
-        # Можно отправить уведомление об ошибке в Telegram, если это необходимо
-        # send(f"🔥 Ошибка генерации отчета: проблема с OpenAI. {e}", add_numeration=False)
-        sys.exit(1) # Выход с ошибкой, чтобы Railway мог это зафиксировать
-    except requests.exceptions.RequestException as e:
-        log(f"❌ Критическая сетевая ошибка: {e}")
+    except RuntimeError as e: 
+        log(f"❌ Критическая ошибка при генерации GPT-отчета: {e}")
+        sys.exit(1) 
+    except requests.exceptions.RequestException as e: 
+        log(f"❌ Критическая сетевая ошибка во время выполнения: {e}")
         log(traceback.format_exc())
-        # send(f"🔥 Сетевая ошибка при работе скрипта. {e}", add_numeration=False)
         sys.exit(1)
-    except Exception as e:
-        log(f"❌ Непредвиденная глобальная ошибка: {e}")
+    except Exception as e: 
+        log(f"❌ Непредвиденная глобальная ошибка в main(): {e}")
         log(traceback.format_exc())
-        # send(f"🔥 Непредвиденная ошибка в работе скрипта. {e}", add_numeration=False)
         sys.exit(1)
-
-if __name__ == "__main__":
-    main()
-
 
 if __name__ == "__main__":
     main()
