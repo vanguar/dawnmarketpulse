@@ -304,13 +304,18 @@ def send(text_content, add_numeration_if_multiple_parts=False):
 
 def main():
     log("🚀 Скрипт запущен.")
+    log(f"🔑 OPENAI_KEY: {'Установлен' if os.getenv('OPENAI_KEY') else 'НЕ УСТАНОВЛЕН!'}")
+    log(f"🔑 WHALE_KEY: {'Установлен' if os.getenv('WHALE_KEY') else 'НЕ УСТАНОВЛЕН!'}")
+
     try:
-        # 1. Генерируем основной текстовый отчет от GPT
-        main_report_text_from_gpt = gpt_report() 
-        
-        # 2. Собираем все компоненты отчета
+        # 1. Генерация основного GPT-отчета
+        log("🔄 Вызов GPT для генерации основного отчета...")
+        main_report_text_from_gpt = gpt_report()
+        log(f"📝 Получен основной отчет от GPT (длина {len(main_report_text_from_gpt)}). Начало: {main_report_text_from_gpt[:100]}")
+
+        # 2. Сборка отчёта по блокам
         list_of_report_components = [
-            "📊 Рыночный отчёт",  # Заголовок для GPT отчета
+            "📊 Рыночный отчёт",
             main_report_text_from_gpt,
             keyword_alert(main_report_text_from_gpt),
             store_and_compare(main_report_text_from_gpt),
@@ -319,48 +324,53 @@ def main():
             get_derivatives_block()
         ]
 
-        # 3. Добавляем китов с обработкой ошибок
         try:
             whale_data = get_whale_activity_summary()
             if "Ошибка" not in whale_data and "API ключ" not in whale_data:
                 list_of_report_components.append("🐋 Крупные переводы")
                 list_of_report_components.append(whale_data)
             else:
-                log(f"ℹ️ Whale Alert не дал данных: {whale_data}")
+                log(f"❗ Whale Alert не дал данных: {whale_data}")
         except Exception as e:
             log(f"🐋 Ошибка Whale Alert в main.py: {e}")
 
-        # Убираем None или пустые строки
+        # 3. Чистка и финальная сборка
         valid_components = []
         for component in list_of_report_components:
             if isinstance(component, str) and component.strip():
                 valid_components.append(component.strip())
             elif component is not None:
-                log(f"⚠️ Компонент отчета не является строкой, но не None: {type(component)}. Преобразован в строку.")
+                log(f"⚠️ Компонент отчета не строка: {type(component)}. Преобразован.")
                 str_component = str(component).strip()
                 if str_component:
                     valid_components.append(str_component)
 
         full_report_final_string = "\n\n".join(valid_components)
+        log(f"📄 Итоговый отчет собран (длина {len(full_report_final_string)}). Начало: {full_report_final_string[:200]}")
 
         # 4. Отправка в Telegram
         if full_report_final_string:
+            log("📨 Отправка отчета в Telegram...")
             send(full_report_final_string, add_numeration_if_multiple_parts=True)
             log("✅ Весь отчёт обработан и отправлен.")
         else:
             log("ℹ️ Итоговый отчет пуст или состоит только из пробельных символов, отправка не требуется.")
 
+        sleep(3)  # ⏱ Дать Telegram успеть всё отправить
+        log("⏳ Скрипт завершает работу после паузы.")
+
     except RuntimeError as e:
         log(f"❌ Критическая ошибка при генерации GPT-отчета: {e}")
         sys.exit(1)
     except requests.exceptions.RequestException as e:
-        log(f"❌ Критическая сетевая ошибка во время выполнения: {e}")
+        log(f"❌ Сетевая ошибка: {e}")
         log(traceback.format_exc())
         sys.exit(1)
     except Exception as e:
-        log(f"❌ Непредвиденная глобальная ошибка в main(): {e}")
+        log(f"❌ Непредвиденная ошибка: {e}")
         log(traceback.format_exc())
         sys.exit(1)
 
 if __name__ == "__main__":
     main()
+
