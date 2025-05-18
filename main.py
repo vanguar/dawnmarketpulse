@@ -152,12 +152,15 @@ def main():
     try:
         report = gpt_report()
         log(f"📝 Сгенерирован отчёт ({len(report)} символов)")
-        send(report, prefix="📊 Рыночный отчёт\n\n")
 
-        # Дополнительные блоки
-        send(keyword_alert(report), prefix="🔍 Ключевые слова\n\n")
-        send(store_and_compare(report), prefix="📈 Сравнение с прошлым\n\n")
-        send(analyze_sentiment(report), prefix="📊 Анализ настроений\n\n")
+        full_report = (
+            "📊 Рыночный отчёт\n\n" + report.strip() + "\n\n" +
+            "🔍 Ключевые слова\n\n" + keyword_alert(report).strip() + "\n\n" +
+            "📈 Сравнение с прошлым\n\n" + store_and_compare(report).strip() + "\n\n" +
+            "📊 Анализ настроений\n\n" + analyze_sentiment(report).strip()
+        )
+
+        send(full_report)
 
         log("✅ Отчёт успешно отправлен в Telegram.")
     except Exception as e:
