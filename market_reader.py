@@ -1,4 +1,3 @@
-
 import os
 import requests
 from datetime import date
@@ -22,10 +21,14 @@ def get_market_data_text():
                 result.append(f"{name}: ❌ ошибка")
                 continue
             price = float(data["Global Quote"]["05. price"])
-            change_percent = data["Global Quote"]["10. change percent"]
-            result.append(f"{name}: ${price:.0f} ({change_percent})")
-    except Exception:
-        result.append("Ошибка при получении индексов.")
+            change_percent_str = data["Global Quote"]["10. change percent"].rstrip('%')
+            try:
+                change_percent = float(change_percent_str)
+                result.append(f"{name}: ${price:,.0f} ({change_percent:+.2f}%)")
+            except ValueError:
+                result.append(f"{name}: ${price:,.0f} ({data['Global Quote']['10. change percent']})")
+    except Exception as e:
+        result.append(f"Ошибка при получении индексов: {e}")
 
     return "\n".join(result)
 
@@ -46,24 +49,45 @@ def get_crypto_data(extended=False):
             "&include_24hr_change=true"
         )
         r = requests.get(url, timeout=10)
+        r.raise_for_status()
         data = r.json()
 
         result = [f"₿ Крипта на {today}"]
         insights = []
 
         for name, cid in symbols.items():
-            price = data[cid]["usd"]
-            change = data[cid]["usd_24h_change"]
-            emoji = "📈" if change > 0 else "📉"
-            result.append(f"{emoji} {name}: ${price:,.0f} ({change:+.2f}%)")
+            if cid not in data:
+                result.append(f"{name}: ❌ нет данных от CoinGecko")
+                continue
+
+            price = data[cid].get("usd")
+            change = data[cid].get("usd_24h_change")
+
+            if price is None or change is None:
+                result.append(f"{name}: ❌ неполные данные от CoinGecko")
+                continue
+
+            emoji = "📈" if change > 0 else "📉" if change < 0 else "📊"
+
+            if 0 < price < 1.0:
+                price_format = f"${price:,.4f}"
+            elif price == 0 and name == "DOGE":
+                price_format = "$0.0000"
+            elif price == 0:
+                price_format = "$0"
+            else:
+                price_format = f"${price:,.2f}"
+
+            result.append(f"{emoji} {name}: {price_format} ({change:+.2f}%)")
 
             if extended:
                 if abs(change) >= 5:
                     direction = "растёт" if change > 0 else "падает"
-                    insights.append(
-                        f"— {name} {direction} более чем на 5%. Возможен разворот или пробой уровня.")
-                elif abs(change) < 1:
-                    insights.append(f"— {name} почти не меняется. Возможна фаза накопления или флэта.")
+                    insights.append(f"— {name} {direction} более чем на 5%. Возможен разворот или пробой уровня.")
+                elif 0 < abs(change) < 1:
+                    insights.append(f"— {name} почти не меняется (изм. {change:+.2f}%). Возможна фаза накопления или флэта.")
+                elif change == 0:
+                    insights.append(f"— {name} без изменений за последние 24ч.")
 
         if extended and insights:
             result.append("\n→ Анализ:")
@@ -71,5 +95,7 @@ def get_crypto_data(extended=False):
 
         return "\n".join(result)
 
+    except requests.exceptions.HTTPError as http_err:
+        return f"₿ Ошибка HTTP при получении криптовалют: {http_err}"
     except Exception as e:
         return f"₿ Ошибка при получении криптовалют: {e}"
