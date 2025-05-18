@@ -1,7 +1,15 @@
 {
-  "services": {
-    "tg-report": {
-      "start": "python main.py"
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python main.py"
+  },
+  "crons": [
+    {
+      "command": "python main.py",
+      "schedule": "* * * * *"
     }
-  }
+  ]
 }
