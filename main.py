@@ -45,9 +45,21 @@ GPT_CONTINUATION = """Акции-лидеры 🚀 / Аутсайдеры 📉
 ‼️ Структурируй текст с ДВОЙНЫМИ переносами строк между абзацами.
 ‼️ Используй эмодзи перед заголовками разделов."""
 
+
 def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
+
+def safe_call(func, retries=3, delay=5, label="❗ Ошибка"):
+    for i in range(retries):
+        try:
+            return func()
+        except Exception as e:
+            log(f"{label}: попытка {i + 1}/{retries} не удалась: {e}")
+            if i < retries - 1:
+                sleep(delay)
+    log(f"{label}: все {retries} попытки провалены.")
+    return None
 
 def gpt_report():
     today = date.today().strftime("%d.%m.%Y")
@@ -59,14 +71,19 @@ def gpt_report():
         get_news_block() + "\n\n" +
         GPT_CONTINUATION
     )
-    r = openai.ChatCompletion.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": dynamic_data}],
-        timeout=TIMEOUT,
-        temperature=0.4,
-        max_tokens=GPT_TOKENS,
+    response = safe_call(
+        lambda: openai.ChatCompletion.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": dynamic_data}],
+            timeout=TIMEOUT,
+            temperature=0.4,
+            max_tokens=GPT_TOKENS,
+        ),
+        label="❗ Ошибка OpenAI"
     )
-    return r.choices[0].message.content.strip()
+    if not response:
+        raise RuntimeError("OpenAI не ответил.")
+    return response.choices[0].message.content.strip()
 
 def prepare_text(text):
     for marker in ["📊", "🚀", "📉", "₿", "📰", "🗣", "🤔", "⚡️"]:
@@ -93,18 +110,18 @@ def chunk(text, limit=TG_LIMIT):
 def send(text):
     text = prepare_text(text)
     for part in chunk(text):
-        try:
-            r = requests.post(
+        def send_part():
+            return requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
                 json={"chat_id": CHANNEL_ID, "text": part, "disable_web_page_preview": True},
                 timeout=10
             )
-            if r.status_code != 200:
-                log(f"❗ Ошибка отправки в TG: {r.status_code}: {r.text}")
-            else:
-                log(f"✅ Часть сообщения успешно отправлена ({len(part)} символов)")
-        except Exception as e:
-            log(f"❗ Ошибка при отправке: {e}")
+
+        response = safe_call(send_part, label="❗ Ошибка отправки в TG")
+        if response and response.status_code == 200:
+            log(f"✅ Часть сообщения успешно отправлена ({len(part)} символов)")
+        elif response:
+            log(f"❗ Ошибка от Telegram: {response.status_code}: {response.text}")
         sleep(1)
 
 def main():
@@ -124,3 +141,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
