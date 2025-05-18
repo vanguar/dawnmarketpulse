@@ -18,7 +18,8 @@ def keyword_alert(text):
         if pattern.search(text):
             findings.append(f"• {word}: {reaction}")
     if findings:
-        return '🔺 Обнаружены ключевые сигналы:\n' + "\n".join(findings)
+        return "⚡️ Обнаружены ключевые сигналы:
+" + "\n".join(findings)
     else:
         return "🟢 Ключевых тревожных сигналов не найдено."
 
@@ -40,7 +41,8 @@ def store_and_compare(report_text, cache_dir="cache"):
     if os.path.exists(yesterday_file):
         with open(yesterday_file, "r", encoding="utf-8") as f:
             previous = f.read()
-        return '📊 Сравнение с вчерашним отчётом:\n' + compare_reports(previous, report_text)
+        return f"📊 Сравнение с вчерашним отчётом:
+{compare_reports(previous, report_text)}"
     else:
         return "📊 Данных за вчера нет для сравнения."
 

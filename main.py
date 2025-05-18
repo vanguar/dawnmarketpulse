@@ -20,6 +20,10 @@ from news_reader import get_news_block
 from analyzer import keyword_alert, store_and_compare
 from report_utils import analyze_sentiment
 
+from metrics_reader import get_derivatives_block
+from whale_alert_reader import get_whale_activity_summary
+
+
 # --- Конфигурация ---
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN = os.getenv("TG_TOKEN")
@@ -34,6 +38,7 @@ GPT_TOKENS = 1000 # Максимальное количество токенов
 
 GPT_CONTINUATION = """Акции-лидеры 🚀 / Аутсайдеры 📉
 - по 2–3 бумаги + причина
+
 → Вывод.
 
 Макро-новости 📰
@@ -48,7 +53,9 @@ GPT_CONTINUATION = """Акции-лидеры 🚀 / Аутсайдеры 📉
 
 ‼️ Только обычный текст, без HTML.
 ‼️ Структурируй текст с ДВОЙНЫМИ переносами строк между абзацами.
-‼️ Используй эмодзи перед заголовками разделов."""
+‼️ Используй эмодзи перед заголовками разделов.
+‼️ Не включай данные по лонгам/шортам и китовым переводам — они добавляются автоматически."""
+
 
 # --- Вспомогательные функции ---
 
@@ -302,49 +309,55 @@ def main():
         main_report_text_from_gpt = gpt_report() 
         
         # 2. Собираем все компоненты отчета
-        # Каждая функция-компонент (keyword_alert и т.д.) должна возвращать строку
-        # уже с необходимыми заголовками и форматированием (например, начинаться с эмодзи-маркера).
-        
         list_of_report_components = [
-            "📊 Рыночный отчёт", # Добавляем общий заголовок для GPT отчета
+            "📊 Рыночный отчёт",  # Заголовок для GPT отчета
             main_report_text_from_gpt,
-            
             keyword_alert(main_report_text_from_gpt),
-            
             store_and_compare(main_report_text_from_gpt),
-            
-            analyze_sentiment(main_report_text_from_gpt)
+            analyze_sentiment(main_report_text_from_gpt),
+            "⚖️ Лонги / Шорты",
+            get_derivatives_block()
         ]
-        
-        # Убираем None или пустые строки/строки из пробелов и затем объединяем
+
+        # 3. Добавляем китов с обработкой ошибок
+        try:
+            whale_data = get_whale_activity_summary()
+            if "Ошибка" not in whale_data and "API ключ" not in whale_data:
+                list_of_report_components.append("🐋 Крупные переводы")
+                list_of_report_components.append(whale_data)
+            else:
+                log(f"ℹ️ Whale Alert не дал данных: {whale_data}")
+        except Exception as e:
+            log(f"🐋 Ошибка Whale Alert в main.py: {e}")
+
+        # Убираем None или пустые строки
         valid_components = []
         for component in list_of_report_components:
             if isinstance(component, str) and component.strip():
-                valid_components.append(component.strip()) # Дополнительно strip() для каждого компонента
-            elif component is not None: # Если не строка, но не None, преобразуем в строку
+                valid_components.append(component.strip())
+            elif component is not None:
                 log(f"⚠️ Компонент отчета не является строкой, но не None: {type(component)}. Преобразован в строку.")
                 str_component = str(component).strip()
                 if str_component:
                     valid_components.append(str_component)
-        
+
         full_report_final_string = "\n\n".join(valid_components)
 
-        # 3. Отправляем собранный отчет в Telegram
+        # 4. Отправка в Telegram
         if full_report_final_string:
-            # Нумерация "Часть X/Y" будет добавлена, только если частей окажется больше одной.
             send(full_report_final_string, add_numeration_if_multiple_parts=True)
             log("✅ Весь отчёт обработан и отправлен.")
         else:
             log("ℹ️ Итоговый отчет пуст или состоит только из пробельных символов, отправка не требуется.")
 
-    except RuntimeError as e: # Ошибка от OpenAI (например, "OpenAI не ответил")
+    except RuntimeError as e:
         log(f"❌ Критическая ошибка при генерации GPT-отчета: {e}")
-        sys.exit(1) 
-    except requests.exceptions.RequestException as e: # Ошибки сети (DNS, Connection refused и т.д.)
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
         log(f"❌ Критическая сетевая ошибка во время выполнения: {e}")
         log(traceback.format_exc())
         sys.exit(1)
-    except Exception as e: # Любые другие непредвиденные ошибки
+    except Exception as e:
         log(f"❌ Непредвиденная глобальная ошибка в main(): {e}")
         log(traceback.format_exc())
         sys.exit(1)
