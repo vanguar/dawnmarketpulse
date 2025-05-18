@@ -24,7 +24,7 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 MODEL       = "gpt-4o-mini"
 TIMEOUT     = 60
-TG_LIMIT    = 4096
+TG_LIMIT    = 3900  # безопасный лимит с запасом
 GPT_TOKENS  = 400
 
 GPT_CONTINUATION = """Акции-лидеры 🚀 / Аутсайдеры 📉
@@ -50,6 +50,7 @@ def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
 
+
 def safe_call(func, retries=3, delay=5, label="❗ Ошибка"):
     for i in range(retries):
         try:
@@ -60,6 +61,7 @@ def safe_call(func, retries=3, delay=5, label="❗ Ошибка"):
                 sleep(delay)
     log(f"{label}: все {retries} попытки провалены.")
     return None
+
 
 def gpt_report():
     today = date.today().strftime("%d.%m.%Y")
@@ -85,60 +87,86 @@ def gpt_report():
         raise RuntimeError("OpenAI не ответил.")
     return response.choices[0].message.content.strip()
 
+
 def prepare_text(text):
     for marker in ["📊", "🚀", "📉", "₿", "📰", "🗣", "🤔", "⚡️"]:
-        text = re.sub(f"({marker}[^\n]+)\n", f"\1\n\n", text)
+        text = re.sub(f"({marker}[^\n]+)\n(?!\n)", f"\1\n\n", text)
     text = re.sub(r"\n→", "\n\n→", text)
     while "\n\n\n" in text:
         text = text.replace("\n\n\n", "\n\n")
-    return text
+    return text.strip()
+
 
 def chunk(text, limit=TG_LIMIT):
     paragraphs = text.split("\n\n")
     chunks = []
     current = ""
+
     for para in paragraphs:
         if len(current) + len(para) + 2 <= limit:
-            current += (para + "\n\n")
+            current += para + "\n\n"
         else:
-            chunks.append(current.strip())
-            current = para + "\n\n"
-    if current:
+            if len(para) > limit:
+                parts = [para[i:i + limit] for i in range(0, len(para), limit)]
+                for part in parts:
+                    if current:
+                        chunks.append(current.strip())
+                        current = ""
+                    chunks.append(part.strip())
+            else:
+                if current:
+                    chunks.append(current.strip())
+                current = para + "\n\n"
+
+    if current.strip():
         chunks.append(current.strip())
+
     return chunks
 
-def send(text):
+
+def send(text, prefix=""):
     text = prepare_text(text)
-    for part in chunk(text):
+    parts = chunk(text)
+    total = len(parts)
+
+    for idx, part in enumerate(parts, 1):
+        numbered_part = f"{prefix}Часть {idx}/{total}:\n\n{part}"
+        
         def send_part():
             return requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": CHANNEL_ID, "text": part, "disable_web_page_preview": True},
+                json={"chat_id": CHANNEL_ID, "text": numbered_part, "disable_web_page_preview": True},
                 timeout=10
             )
 
         response = safe_call(send_part, label="❗ Ошибка отправки в TG")
         if response and response.status_code == 200:
-            log(f"✅ Часть сообщения успешно отправлена ({len(part)} символов)")
+            log(f"✅ Отправлена часть {idx}/{total} ({len(part)} символов)")
         elif response:
             log(f"❗ Ошибка от Telegram: {response.status_code}: {response.text}")
         sleep(1)
+
 
 def main():
     log("🚀 Railway запустил скрипт по расписанию.")
     try:
         report = gpt_report()
         log(f"📝 Сгенерирован отчёт ({len(report)} символов)")
-        send(report)
-        send(keyword_alert(report))
-        send(store_and_compare(report))
-        send(analyze_sentiment(report))
+        send(report, prefix="📊 Рыночный отчёт\n\n")
+
+        # Дополнительные блоки
+        send(keyword_alert(report), prefix="🔍 Ключевые слова\n\n")
+        send(store_and_compare(report), prefix="📈 Сравнение с прошлым\n\n")
+        send(analyze_sentiment(report), prefix="📊 Анализ настроений\n\n")
+
         log("✅ Отчёт успешно отправлен в Telegram.")
     except Exception as e:
         log(f"❌ Ошибка выполнения: {e}")
         log(traceback.format_exc())
         sys.exit(1)
 
+
 if __name__ == "__main__":
     main()
+
 
