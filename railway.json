@@ -5,11 +5,5 @@
   },
   "deploy": {
     "startCommand": "python main.py"
-  },
-  "crons": [
-    {
-      "command": "python main.py",
-      "schedule": "* * * * *"
-    }
-  ]
+  }
 }
