@@ -22,7 +22,7 @@ from analyzer import keyword_alert, store_and_compare
 from report_utils import analyze_sentiment
 
 from metrics_reader import get_derivatives_block
-from whale_alert_reader import get_whale_activity_summary
+#from whale_alert_reader import get_whale_activity_summary
 
 
 # --- Конфигурация ---
@@ -315,17 +315,9 @@ def main():
         crypto_price_block = get_crypto_data(extended=True) # Уже содержит заголовок "₿ Крипта на ДАТА"
         derivatives_block = get_derivatives_block() # Уже содержит заголовок "⚖️ Лонги / Шорты"
         
-        whale_activity_block = "" 
-        try:
-            whale_summary = get_whale_activity_summary()
-            if "Ошибка" not in whale_summary and "API ключ не указан" not in whale_summary and "Нет крупных перемещений" not in whale_summary:
-                whale_activity_block = f"🐋 Крупные криптовалютные переводы\n{whale_summary}"
-            elif "Нет крупных перемещений" in whale_summary:
-                whale_activity_block = whale_summary 
-            else:
-                log(f"ℹ️ Whale Alert не дал данных или ошибка: {whale_summary}") # Изменено с ❗ на ℹ️ если это просто "нет данных"
-        except Exception as e:
-            log(f"🐋 Ошибка при вызове get_whale_activity_summary в main.py: {e}")
+       # ЗАГЛУШКА для Whale Alert, так как сервис whale-alert.io недоступен
+        whale_activity_block = "ℹ️ Мониторинг крупных крипто-переводов временно недоступен (сервис whale-alert.io прекратил работу)."
+        log("ℹ️ Модуль Whale Alert отключен (сервис whale-alert.io недоступен).")
 
         # 2. Сбор данных по ФОНДОВОМУ РЫНКУ (выводятся вторыми)
         log("🔄 Сбор данных по фондовому рынку...")
