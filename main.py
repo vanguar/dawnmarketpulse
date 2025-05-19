@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import pytz
 import nltk
 # Используем quiet=True, чтобы не было лишних сообщений в логах при каждом запуске
 nltk.download('punkt', quiet=True)
@@ -371,6 +372,26 @@ def main():
         full_report_final_string = "\n\n".join(valid_components)
         # Добавляем общий заголовок для всего сообщения в Telegram
         final_telegram_message = f"⚡️ DawnMarket Pulse:\n\n{full_report_final_string}"
+        # <<< НАЧАЛО ПРЕДЛАГАЕМОГО ДОБАВЛЕНИЯ >>>
+        try:
+            # Попытка получить время с указанием часового пояса из переменной окружения TZ
+            # На Railway можно установить переменную окружения TZ, например, "Europe/Kiev"
+            tz_name = os.getenv("TZ")
+            if tz_name:
+                user_timezone = timezone(pytz.timezone(tz_name).utcoffset(datetime.now()))
+            else: # Фоллбэк на UTC+2, если TZ не задан
+                user_timezone = timezone(timedelta(hours=2)) # Пример для UTC+2
+
+            current_time_in_zone = datetime.now(user_timezone).strftime("%H:%M (%Z)")
+            data_update_signature = f"\n\n---\n📅 Данные на ~ {date.today().strftime('%d.%m.%Y')}, обновлены около {current_time_in_zone}."
+            final_telegram_message += data_update_signature
+        except Exception as e:
+            log(f"⚠️ Не удалось добавить временную метку с часовым поясом: {e}")
+            # Фоллбэк на простое время без явной зоны, если что-то пошло не так с TZ
+            current_time_simple = datetime.now().strftime("%H:%M")
+            data_update_signature = f"\n\n---\n📅 Данные на ~ {date.today().strftime('%d.%m.%Y')}, обновлены около {current_time_simple}."
+            final_telegram_message += data_update_signature
+        # <<< КОНЕЦ ПРЕДЛАГАЕМОГО ДОБАВЛЕНИЯ >>>
         log(f"📄 Итоговый отчет собран (длина {len(final_telegram_message)}). Начало: {final_telegram_message[:200]}")
 
         # 6. Отправка в Telegram

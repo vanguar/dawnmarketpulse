@@ -3,3 +3,5 @@ requests==2.31.0
 python-dotenv==1.0.1
 textblob==0.17.1
 nltk==3.8.1
+yfinance>=0.2.4  # Или просто yfinance
+pytz>=2023.3     # Или просто pytz
