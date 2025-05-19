@@ -24,7 +24,7 @@ def get_crypto_data(extended=False):
         )
 
         headers = {
-            'User-Agent': 'DawnMarketPulseBot/1.0 (+ваш-телеграм-канал-или-контакт)'
+            'User-Agent': 'DawnMarketPulseBot/1.0 (+https://t.me/DawnMarketPulse)'
         }
 
         r = requests.get(url, timeout=15, headers=headers)
