@@ -23,6 +23,7 @@ from report_utils import analyze_sentiment
 
 from metrics_reader import get_derivatives_block
 #from whale_alert_reader import get_whale_activity_summary
+from whale_alert_reader import get_whale_activity_summary
 
 
 # --- Конфигурация ---
@@ -315,9 +316,9 @@ def main():
         crypto_price_block = get_crypto_data(extended=True) # Уже содержит заголовок "₿ Крипта на ДАТА"
         derivatives_block = get_derivatives_block() # Уже содержит заголовок "⚖️ Лонги / Шорты"
         
-       # ЗАГЛУШКА для Whale Alert, так как сервис whale-alert.io недоступен
-        whale_activity_block = "ℹ️ Мониторинг крупных крипто-переводов временно недоступен (сервис whale-alert.io прекратил работу)."
-        log("ℹ️ Модуль Whale Alert отключен (сервис whale-alert.io недоступен).")
+        log("🔄 Сбор данных по китовым транзакциям...")
+        whale_activity_block = get_whale_activity_summary()
+        log("🐋 Данные по китам получены.")
 
         # 2. Сбор данных по ФОНДОВОМУ РЫНКУ (выводятся вторыми)
         log("🔄 Сбор данных по фондовому рынку...")
