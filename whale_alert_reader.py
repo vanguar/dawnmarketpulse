@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timedelta
 
 BITQUERY_TOKEN = os.getenv("BITQUERY_TOKEN")
-BITQUERY_URL = "https://graphql.bitquery.io/" # Этот URL уже правильный
+BITQUERY_URL = "https://graphql.bitquery.io/"
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -11,65 +11,52 @@ HEADERS = {
 }
 
 NETWORKS = [
-    {"name": "Ethereum", "slug": "ethereum", "type": "transfers_evm"}, # Тип изменен для EVM
-    {"name": "BSC", "slug": "bsc", "type": "transfers_evm"},          # Тип изменен для EVM
-    {"name": "Polygon", "slug": "polygon", "type": "transfers_evm"},  # Тип изменен для EVM
-    {"name": "Tron", "slug": "tron", "type": "transfers_direct"}, # Предполагаем прямой доступ, НУЖНО ПРОВЕРИТЬ ДОКУМЕНТАЦИЮ!
-    {"name": "Solana", "slug": "solana", "type": "transfers_direct"},# Предполагаем прямой доступ, НУЖНО ПРОВЕРИТЬ ДОКУМЕНТАЦИЮ!
-    {"name": "XRP", "slug": "ripple", "type": "transfers_direct"}, # Предполагаем прямой доступ, НУЖНО ПРОВЕРИТЬ ДОКУМЕНТАЦИЮ!
+    {"name": "Ethereum", "slug": "ethereum", "type": "transfers"},
+    {"name": "BSC", "slug": "bsc", "type": "transfers"},
+    {"name": "Polygon", "slug": "polygon", "type": "transfers"},
+    {"name": "Tron", "slug": "tron", "type": "transfers"},
+    {"name": "Solana", "slug": "solana", "type": "transfers", "fallback_amount": 25000},
+    {"name": "XRP", "slug": "ripple", "type": "transfers", "fallback_amount": 1000000},
     {"name": "Bitcoin", "slug": "bitcoin", "type": "outputs"}
 ]
 
-def build_transfer_query(network_slug, type, date_from, date_to, use_native=False, native_limit=0):
-    # Формируем фильтр для 'where'
-    # Числовые значения передаем как строки согласно документации Bitquery
-    if use_native:
-        inner_filter_content = f"amount: {{gt: \"{native_limit}\"}}"
-        order_by_field = "amount" # Поле для сортировки в fallback
-    else:
-        inner_filter_content = f"amountUsd: {{gt: \"500000\"}}"
-        order_by_field = "amountUsd" # Основное поле для сортировки
+def build_transfer_query(network_slug, date_from, date_to, use_native=False, native_limit=0):
+    # Серверная фильтрация по сумме убрана, т.к. API ее не принимал в предыдущих тестах.
+    # Фильтрация будет производиться локально.
+    # Запрашиваем больше данных (limit: 20) и сортируем на стороне сервера.
+    
+    order_by_field = "amount" if use_native else "amountUsd"
+    
+    # ВАЖНО: Убедитесь, что синтаксис limit и orderBy корректен для Bitquery API V2
+    # и что указанные поля ('amount', 'amountUsd') действительно доступны для сортировки.
+    order_and_limit = f"limit: {{count: 20}}, orderBy: {{descending: \"{order_by_field}\"}}"
 
-    # Структура where: { field: { operator: "value" } }
-    where_clause = f"where: {{ {inner_filter_content} }}"
-
-    # Сортировка и лимит согласно примерам из документации Bitquery (limit: {count: N}, orderBy: {descending: "FieldName"})
-    # ВАЖНО: Убедитесь, что "amountUsd" и "amount" являются корректными полями для сортировки в схеме Bitquery.
-    order_and_limit = f"limit: {{count: 10}}, orderBy: {{descending: \"{order_by_field}\"}}"
-
-    common_transfers_body = f"""
-    transfers(
-      date: {{since: "{date_from}", till: "{date_to}"}}
-      {where_clause}
-      {order_and_limit}
-    ) {{
-      amount
-      amountUsd
-      currency {{ symbol }}
-      sender {{ address annotation smartContract {{ contractType }} owner }}
-      receiver {{ address annotation smartContract {{ contractType }} owner }}
-      transaction {{ hash blockTimestamp }}
+    # Прямой запрос к network_slug как корневому полю.
+    # ВАЖНО: Для некоторых сетей (особенно EVM) может потребоваться другая структура (например, EVM(network:"slug"){{...}}).
+    # Если для каких-то сетей этот запрос не сработает, ищите правильную структуру в документации Bitquery.
+    network_specific_query = f"""
+    {network_slug} {{
+      transfers(
+        date: {{since: "{date_from}", till: "{date_to}"}}
+        {order_and_limit}
+      ) {{
+        amount
+        amountUsd
+        currency {{ symbol }}
+        sender {{ address annotation smartContract {{ contractType }} owner }}
+        receiver {{ address annotation smartContract {{ contractType }} owner }}
+        transaction {{ hash blockTimestamp }}
+      }}
     }}
     """
-
-    if type == "transfers_evm":
-        # Для EVM сетей запрос оборачивается в EVM(network: "slug")
-        network_specific_query = f"EVM(network: \"{network_slug}\") {{ {common_transfers_body} }}"
-    elif type == "transfers_direct":
-        # Для сетей, где slug может быть корневым полем (ТРЕБУЕТ ПРОВЕРКИ ПО ДОКУМЕНТАЦИИ!)
-        network_specific_query = f"{network_slug} {{ {common_transfers_body} }}"
-    else:
-        raise ValueError(f"Неизвестный тип сети для transfer query: {type}")
-        
     return {"query": f"{{ {network_specific_query} }}"}
 
 def build_btc_query(date_from, date_to):
-    # Фильтр по value внутри 'where' и значение как строка
-    where_clause = f"where: {{ value: {{gt: \"10\"}} }}" # gt: "10" для Bitcoin value
-    
-    # Сортировка и лимит
-    # ВАЖНО: Убедитесь, что "value" является корректным полем для сортировки в схеме Bitquery.
-    order_and_limit = f"limit: {{count: 10}}, orderBy: {{descending: \"value\"}}"
+    # Серверная фильтрация по сумме (value) убрана.
+    # Фильтрация будет производиться локально.
+
+    # ВАЖНО: Убедитесь, что синтаксис limit и orderBy (для поля 'value') корректен.
+    order_and_limit = f"limit: {{count: 20}}, orderBy: {{descending: \"value\"}}"
     
     return {
         "query": f"""
@@ -77,7 +64,6 @@ def build_btc_query(date_from, date_to):
   bitcoin {{ # Предполагаем, что "bitcoin" - это правильное корневое поле
     outputs(
       date: {{since: "{date_from}", till: "{date_to}"}}
-      {where_clause}
       {order_and_limit}
     ) {{
       value
@@ -124,22 +110,21 @@ def get_whale_activity_summary(debug=False):
     processed_tx_hashes = set()
 
     for net in NETWORKS:
+        original_data_from_primary_query = True # Флаг, чтобы знать, откуда данные для фильтрации
         try:
             query = None
-            if net["type"] == "transfers_evm" or net["type"] == "transfers_direct":
-                query = build_transfer_query(net["slug"], net["type"], date_from, date_to)
-                if "fallback_amount" in net: # Сохраняем возможность fallback
-                     query_fb_func = lambda: build_transfer_query(
-                        net["slug"], net["type"], date_from, date_to,
-                        use_native=True,
-                        native_limit=net["fallback_amount"]
-                    )
-                else:
-                    query_fb_func = None
+            query_fb_func = None # Функция для генерации fallback-запроса
 
+            if net["type"] == "transfers":
+                query = build_transfer_query(net["slug"], date_from, date_to, use_native=False)
+                if "fallback_amount" in net:
+                     query_fb_func = lambda: build_transfer_query(
+                        net["slug"], date_from, date_to,
+                        use_native=True, # Для fallback используем сортировку по 'amount'
+                        native_limit=net["fallback_amount"] # native_limit сейчас не используется для API фильтра
+                    )
             elif net["type"] == "outputs": # Bitcoin
                 query = build_btc_query(date_from, date_to)
-                query_fb_func = None # Нет fallback для Bitcoin в текущей логике
             else:
                 results.append(f"⚠️ [{net['name']}] Неподдерживаемый тип данных: {net['type']}.")
                 continue
@@ -150,9 +135,9 @@ def get_whale_activity_summary(debug=False):
 
             if "errors" in data:
                 error_details = str(data["errors"])
-                # Если есть fallback и основная ошибка, пытаемся сделать fallback
                 if query_fb_func:
                     results.append(f"ℹ️ [{net['name']}] Ошибка в основном запросе ({error_details[:100]}), пробую fallback...")
+                    original_data_from_primary_query = False # Данные будут из fallback
                     query_fb = query_fb_func()
                     r_fb = requests.post(BITQUERY_URL, headers=HEADERS, json=query_fb, timeout=45)
                     r_fb.raise_for_status()
@@ -161,80 +146,104 @@ def get_whale_activity_summary(debug=False):
                         error_details_fb = str(data_fb["errors"])
                         results.append(f"❌ [{net['name']}-Fallback] Ошибка API Bitquery: {error_details_fb[:200]}")
                         continue
-                    data = data_fb # Используем данные из fallback
-                    results.append(f"✅ [{net['name']}-Fallback] Данные получены.")
+                    data = data_fb
+                    results.append(f"✅ [{net['name']}-Fallback] Данные получены (будут отфильтрованы локально).")
                 else:
                     results.append(f"❌ [{net['name']}] Ошибка API Bitquery: {error_details[:200]}")
                     continue
             
-            # Определяем ключ для извлечения данных (EVM или прямой slug)
-            if net["type"] == "transfers_evm":
-                chain_data_outer = data.get("data", {}).get("EVM")
-            elif net["type"] == "transfers_direct":
-                 chain_data_outer = data.get("data", {}).get(net["slug"])
-            elif net["type"] == "outputs": # Bitcoin
-                chain_data_outer = data.get("data", {}).get("bitcoin")
-            else:
-                chain_data_outer = None
+            chain_data_root_key = net["slug"] # Общий случай после удаления EVM-обертки
+            if net["type"] == "outputs": # Bitcoin имеет свой ключ 'bitcoin'
+                chain_data_root_key = "bitcoin"
+            
+            chain_data_outer = data.get("data", {}).get(chain_data_root_key)
 
             if chain_data_outer is None:
-                data_key_name = f"EVM/{net['slug']}" if net["type"] == "transfers_evm" else net["slug"]
-                results.append(f"ℹ️ [{net['name']}] Нет данных ('{data_key_name}') в ответе Bitquery после обработки.")
+                results.append(f"ℹ️ [{net['name']}] Нет данных ('{chain_data_root_key}') в ответе Bitquery.")
                 continue
 
-            # Извлекаем список транзакций/выходов
-            if net["type"] == "transfers_evm" or net["type"] == "transfers_direct":
-                transfers_list = chain_data_outer.get("transfers", [])
+            raw_list_from_api = []
+            if net["type"] == "transfers":
+                raw_list_from_api = chain_data_outer.get("transfers", [])
             elif net["type"] == "outputs":
-                transfers_list = chain_data_outer.get("outputs", [])
-            else:
-                transfers_list = []
+                raw_list_from_api = chain_data_outer.get("outputs", [])
 
+            if not raw_list_from_api:
+                results.append(f"ℹ️ [{net['name']}] API вернул пустой список транзакций/выходов.")
+                continue
 
-            if not transfers_list:
-                # Если основной запрос не дал результатов, а fallback не был задействован из-за отсутствия ошибок,
-                # но должен был быть (т.е. transfers_list пуст, но fallback_amount есть),
-                # то это условие не совсем корректно обработает ситуацию "пустой ответ, но есть fallback"
-                # Логика fallback выше уже должна была это покрыть, если был error.
-                # Если просто пустой список без ошибок, то fallback по текущей логике не вызывается,
-                # кроме как через 'use_native=True' в query_fb_func.
-                # Это условие оставлено для случая, если даже fallback вернул пустой список.
-                if query_fb_func and not data.get("errors"): # Если fallback был, но все равно пусто
-                     results.append(f"ℹ️ [{net['name']}] Нет крупных транзакций (включая fallback).")
-                else: # Если fallback не было или он тоже не дал
-                     results.append(f"ℹ️ [{net['name']}] Нет крупных транзакций.")
+            # --- Локальная фильтрация ---
+            locally_filtered_list = []
+            if net["type"] == "transfers":
+                USD_FILTER_THRESHOLD = 500000.0
+                # Для fallback использовался native_limit для сортировки, но фильтрация все равно по USD, если есть
+                # или по native_limit, если amountUsd отсутствует и это был fallback
+                NATIVE_FILTER_THRESHOLD_FALLBACK = float(net.get("fallback_amount", 0))
+
+                for tx_item in raw_list_from_api:
+                    include_tx = False
+                    amount_usd_str = tx_item.get("amountUsd")
+                    amount_str = tx_item.get("amount")
+
+                    if amount_usd_str is not None:
+                        try:
+                            if float(amount_usd_str) >= USD_FILTER_THRESHOLD:
+                                include_tx = True
+                        except (ValueError, TypeError): pass
+                    # Если amountUsd нет или он мал, И это были данные из fallback (где сортировали по amount),
+                    # И есть fallback_amount, то проверяем по нему.
+                    # Флаг original_data_from_primary_query поможет это определить.
+                    elif not original_data_from_primary_query and NATIVE_FILTER_THRESHOLD_FALLBACK > 0 and amount_str is not None:
+                         try:
+                            if float(amount_str) >= NATIVE_FILTER_THRESHOLD_FALLBACK:
+                                include_tx = True
+                         except (ValueError, TypeError): pass
+                    
+                    if include_tx:
+                        locally_filtered_list.append(tx_item)
+
+            elif net["type"] == "outputs": # Bitcoin
+                BTC_FILTER_THRESHOLD = 10.0
+                for tx_item in raw_list_from_api:
+                    value_btc_str = tx_item.get("value")
+                    if value_btc_str is not None:
+                        try:
+                            if float(value_btc_str) >= BTC_FILTER_THRESHOLD:
+                                locally_filtered_list.append(tx_item)
+                        except (ValueError, TypeError): pass
+            
+            if not locally_filtered_list:
+                results.append(f"ℹ️ [{net['name']}] Нет крупных транзакций (после локальной фильтрации).")
                 continue
             
+            # --- Обработка и вывод отфильтрованных транзакций ---
             count = 0
-            for tx_item in transfers_list: # tx_item это либо transfer, либо output
+            for tx_item in locally_filtered_list:
                 if count >= 5: break
 
                 tx_hash = tx_item.get("transaction", {}).get("hash")
                 if tx_hash and tx_hash in processed_tx_hashes:
                     continue
                 
-                if net["type"] == "transfers_evm" or net["type"] == "transfers_direct":
+                if net["type"] == "transfers":
                     currency_obj = tx_item.get("currency")
                     if not currency_obj:
-                        results.append(f"⚠️ [{net['name']}] Пропуск TX: нет данных о валюте. Хэш: {tx_hash or 'N/A'}")
+                        results.append(f"⚠️ [{net['name']}] Пропуск TX (фильтр): нет данных о валюте. Хэш: {tx_hash or 'N/A'}")
                         continue
                     symbol = currency_obj.get("symbol", "???")
 
-                    amount_val = tx_item.get("amount")
+                    # Сумма уже проверена при локальной фильтрации, но для вывода берем ту, что есть
+                    amount_to_display_str = tx_item.get("amountUsd") if tx_item.get("amountUsd") is not None else tx_item.get("amount")
                     try:
-                        amount_float = float(amount_val) if amount_val is not None else 0.0
+                        amount_display_float = float(amount_to_display_str) if amount_to_display_str is not None else 0.0
                     except (ValueError, TypeError):
-                        results.append(f"⚠️ [{net['name']}] Пропуск TX: неверный формат суммы '{amount_val}'. Хэш: {tx_hash or 'N/A'}")
-                        continue
+                        amount_display_float = 0.0
                     
-                    if amount_float == 0.0 and not tx_item.get("amountUsd"):
-                        continue
-
                     sender_obj_raw = tx_item.get("sender")
                     receiver_obj_raw = tx_item.get("receiver")
 
-                    if not sender_obj_raw or not receiver_obj_raw:
-                        results.append(f"⚠️ [{net['name']}] Пропуск TX: нет данных об отправителе/получателе. Хэш: {tx_hash or 'N/A'}")
+                    if not sender_obj_raw or not receiver_obj_raw: # Доп. проверка, хотя вряд ли нужна после фильтра
+                        results.append(f"⚠️ [{net['name']}] Пропуск TX (фильтр): нет отправителя/получателя. Хэш: {tx_hash or 'N/A'}")
                         continue
                     
                     sender_display = get_display_name(sender_obj_raw)
@@ -248,16 +257,21 @@ def get_whale_activity_summary(debug=False):
                         if not (sender_obj_raw.get("owner") or ("exchange" in str(sender_obj_raw.get("annotation","")).lower())):
                             direction = "🐳 Ввод"
 
-                    results.append(f"{direction} [{net['name']}] {amount_float:,.0f} {symbol}: {sender_display} → {receiver_display}")
+                    # Определяем, какую сумму выводить и с каким символом
+                    display_amount_formatted = f"{amount_display_float:,.0f}"
+                    display_symbol = symbol
+                    if tx_item.get("amountUsd") is not None: # Если есть сумма в USD, показываем ее
+                         # Уже отформатировано выше display_amount_formatted
+                         display_symbol = f"USD ({symbol})" if symbol != "???" and float(tx_item.get("amountUsd")) >= USD_FILTER_THRESHOLD else symbol # Уточнение символа
+                    elif not original_data_from_primary_query and NATIVE_FILTER_THRESHOLD_FALLBACK > 0 : # Данные из fallback по нативной сумме
+                         # display_amount_formatted уже содержит нативную сумму
+                         pass # display_symbol остается symbol
 
-                elif net["type"] == "outputs": # Bitcoin (btc_out это tx_item)
-                    value_btc_str = tx_item.get("value")
-                    try:
-                        value_btc = float(value_btc_str) if value_btc_str is not None else 0.0
-                    except (ValueError, TypeError):
-                        results.append(f"⚠️ [Bitcoin] Пропуск Output: неверный формат value '{value_btc_str}'. Хэш: {tx_hash or 'N/A'}")
-                        continue
-                    if value_btc == 0.0: continue
+                    results.append(f"{direction} [{net['name']}] {display_amount_formatted} {display_symbol}: {sender_display} → {receiver_display}")
+
+                elif net["type"] == "outputs": # Bitcoin
+                    value_btc_str = tx_item.get("value") # Уже проверено при фильтрации
+                    value_btc = float(value_btc_str) # Должно быть безопасно после фильтра
                     
                     tx_detail_obj = tx_item.get("transaction")
                     output_address_obj = tx_item.get("address")
@@ -287,7 +301,6 @@ def get_whale_activity_summary(debug=False):
         except Exception as e:
             msg = f"⚠️ [{net['name']}] Общая ошибка: {str(e)}"
             if debug:
-                # Безопасная проверка наличия r или r_fb и их атрибута text
                 response_text = None
                 if 'r_fb' in locals() and hasattr(r_fb, 'text'): response_text = r_fb.text
                 elif 'r' in locals() and hasattr(r, 'text'): response_text = r.text
@@ -295,6 +308,6 @@ def get_whale_activity_summary(debug=False):
             results.append(msg)
 
     if not results:
-        return "🐋 Нет значимых транзакций китов за последние 24 часа."
+        return "🐋 Нет данных по крупным транзакциям после всех попыток и фильтрации." # Изменено сообщение
 
     return "\n".join(results)
