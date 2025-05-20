@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timedelta
 
 BITQUERY_TOKEN = os.getenv("BITQUERY_TOKEN") # Убедитесь, что эта переменная установлена в вашей среде (например, в Railway)
-BITQUERY_URL = "https://streaming.bitquery.io/graphql"
+BITQUERY_URL = "https://graphql.bitquery.io/"
 
 HEADERS = {
     "Content-Type": "application/json",
