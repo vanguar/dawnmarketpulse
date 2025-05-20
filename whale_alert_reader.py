@@ -102,9 +102,12 @@ def get_whale_activity_summary(debug=False):
 
             # Проверка на наличие данных по сети
             chain_data = data.get("data", {}).get(net["slug"] if net["type"] != "outputs" else "bitcoin")
-            if chain_data is None:
-                results.append(f"❌ [{net['name']}] Нет данных в ответе Bitquery.")
+            if not isinstance(chain_data, dict):
+                results.append(f"❌ [{net['name']}] Некорректный формат данных от Bitquery.")
+                if debug:
+                    results.append(f"Ответ Bitquery:\n{r.text}")
                 continue
+
 
             if net["type"] == "transfers":
                 transfers = chain_data.get("transfers", [])
@@ -119,10 +122,13 @@ def get_whale_activity_summary(debug=False):
                     r.raise_for_status()
                     data = r.json()
                     chain_data = data.get("data", {}).get(net["slug"])
-                    if not chain_data:
-                        results.append(f"❌ [{net['name']}] Fallback тоже не дал данных.")
+                    if not isinstance(chain_data, dict):
+                        results.append(f"❌ [{net['name']}] Fallback тоже не дал данных или формат неверен.")
+                        if debug:
+                            results.append(f"Ответ Bitquery:\n{r.text}")
                         continue
                     transfers = chain_data.get("transfers", [])
+
 
                 if not transfers:
                     results.append(f"ℹ️ [{net['name']}] Нет крупных транзакций.")
