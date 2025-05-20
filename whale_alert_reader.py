@@ -78,7 +78,7 @@ def get_display_name(addr, owner, annotation):
     else:
         return f"{addr[:6]}...{addr[-4:]}" if addr else "???"
 
-def get_whale_activity_summary():
+def get_whale_activity_summary(debug=False):
     today = datetime.utcnow()
     yesterday = today - timedelta(days=1)
     date_from = yesterday.strftime("%Y-%m-%d")
@@ -92,15 +92,24 @@ def get_whale_activity_summary():
                 query = build_transfer_query(net["slug"], date_from, date_to)
             elif net["type"] == "outputs":
                 query = build_btc_query(date_from, date_to)
+            else:
+                results.append(f"⚠️ [{net['name']}] Неподдерживаемый тип данных.")
+                continue
 
             r = requests.post(BITQUERY_URL, headers=HEADERS, json=query, timeout=30)
             r.raise_for_status()
             data = r.json()
 
+            # Проверка на наличие данных по сети
+            chain_data = data.get("data", {}).get(net["slug"] if net["type"] != "outputs" else "bitcoin")
+            if chain_data is None:
+                results.append(f"❌ [{net['name']}] Нет данных в ответе Bitquery.")
+                continue
+
             if net["type"] == "transfers":
-                transfers = data.get("data", {}).get(net["slug"], {}).get("transfers", [])
-                # fallback если пусто и нужна вторая попытка
+                transfers = chain_data.get("transfers", [])
                 if not transfers and "fallback_amount" in net:
+                    # fallback на amount
                     query = build_transfer_query(
                         net["slug"], date_from, date_to,
                         use_native=True,
@@ -109,7 +118,15 @@ def get_whale_activity_summary():
                     r = requests.post(BITQUERY_URL, headers=HEADERS, json=query, timeout=30)
                     r.raise_for_status()
                     data = r.json()
-                    transfers = data.get("data", {}).get(net["slug"], {}).get("transfers", [])
+                    chain_data = data.get("data", {}).get(net["slug"])
+                    if not chain_data:
+                        results.append(f"❌ [{net['name']}] Fallback тоже не дал данных.")
+                        continue
+                    transfers = chain_data.get("transfers", [])
+
+                if not transfers:
+                    results.append(f"ℹ️ [{net['name']}] Нет крупных транзакций.")
+                    continue
 
                 for tx in transfers[:5]:
                     symbol = tx["currency"]["symbol"]
@@ -128,7 +145,11 @@ def get_whale_activity_summary():
                     results.append(f"{direction} [{net['name']}] {amount:,.0f} {symbol}: {sender} → {receiver}")
 
             elif net["type"] == "outputs":
-                transfers = data.get("data", {}).get("bitcoin", {}).get("outputs", [])
+                transfers = chain_data.get("outputs", [])
+                if not transfers:
+                    results.append(f"ℹ️ [Bitcoin] Нет крупных выводов.")
+                    continue
+
                 for tx in transfers[:5]:
                     txdata = tx["transaction"]
                     value_btc = float(tx["value"])
@@ -137,18 +158,21 @@ def get_whale_activity_summary():
                     input_addrs = {i["address"] for i in inputs}
                     output_addrs = {o["address"] for o in outputs}
 
-                    # исключаем change: если адрес есть и там, и там — это сдача
+                    # исключаем сдачу
                     true_outputs = output_addrs - input_addrs
-
                     sender = next(iter(input_addrs)) if input_addrs else "unknown"
                     receiver = next(iter(true_outputs)) if true_outputs else "unknown"
 
                     results.append(f"💸 [Bitcoin] ~{value_btc:.2f} BTC: {sender[:6]}... → {receiver[:6]}...")
 
         except Exception as e:
-            results.append(f"⚠️ [{net['name']}] Ошибка: {e}")
+            msg = f"⚠️ [{net['name']}] Ошибка: {str(e)}"
+            if debug:
+                msg += f"\n{r.text if 'r' in locals() else ''}"
+            results.append(msg)
 
     if not results:
         return "🐋 Нет крупных транзакций за последние 24 часа."
 
     return "\n".join(results)
+
