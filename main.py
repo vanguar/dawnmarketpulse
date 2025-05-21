@@ -337,6 +337,9 @@ def main():
             derivatives_block, 
             whale_activity_block,
 
+            # --- Визуальный разделитель ---
+            "______________________________", # <--- Твой разделитель
+
             # --- Блок ФОНДОВОГО РЫНКА ---
             market_data_block, 
 
@@ -345,10 +348,13 @@ def main():
             f"🤖 Анализ и выводы от эксперта GPT на {date.today().strftime('%d.%m.%Y')}:",
             main_analytical_text_from_gpt,
 
-            # --- Дополнительные аналитические компоненты (относятся к тексту GPT) ---
-            keyword_alert(main_analytical_text_from_gpt), 
-            store_and_compare(main_analytical_text_from_gpt), 
-            analyze_sentiment(main_analytical_text_from_gpt) 
+            # В функции main() в main.py, при формировании list_of_report_components
+            # ...
+                # --- Дополнительные аналитические компоненты (относятся к тексту GPT) ---
+                keyword_alert(main_analytical_text_from_gpt),
+                store_and_compare(main_analytical_text_from_gpt),
+                # analyze_sentiment(main_analytical_text_from_gpt) # <-- ЗАКОММЕНТИРУЙ ИЛИ УДАЛИ ЭТУ СТРОКУ
+            # ... 
         ]
         
         # 5. Чистка и финальная сборка
