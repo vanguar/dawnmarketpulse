@@ -11,12 +11,12 @@ HEADERS = {
 }
 
 NETWORKS = [
-    {"name": "Ethereum", "type": "transfers", "query_root_field": "ethereum", "network_arg": "eth"},
+    {"name": "Ethereum", "type": "transfers", "query_root_field": "ethereum", "network_arg": "ethereum"}, # Изменено с "eth"
     {"name": "BSC", "type": "transfers", "query_root_field": "ethereum", "network_arg": "bsc"},
     {"name": "Polygon", "type": "transfers", "query_root_field": "ethereum", "network_arg": "matic"},
     {"name": "Tron", "type": "transfers", "query_root_field": "tron"},
     {"name": "Solana", "type": "transfers", "query_root_field": "solana"},
-    {"name": "XRP", "type": "transfers", "query_root_field": "ripple"},
+    {"name": "XRP", "type": "transfers", "query_root_field": "ripple"}, # Используем 'ripple' как query_root_field для XRP
     {"name": "Bitcoin", "type": "outputs", "query_root_field": "bitcoin"}
 ]
 
@@ -24,61 +24,116 @@ def build_query_for_network(net_config, date_from, date_to):
     root_field = net_config["query_root_field"]
     network_arg_value = net_config.get("network_arg")
 
-    fields_common_transfers = """
-        amount
-        amountUsd
-        currency { symbol }
-        sender { address annotation smartContract { contractType } owner }
+    # Основные поля, общие для большинства запросов transfers (кроме суммы и специфичных для сети полей валюты)
+    base_fields_transfers_core = """
+        block { timestamp { iso8601 } }
         receiver { address annotation smartContract { contractType } owner }
+        sender { address annotation smartContract { contractType } owner }
         transaction { hash blockTimestamp }
     """
 
+    # Поля суммы и валюты, специфичные для сети
+    amount_field_query_part = ""
+    currency_fields_query_part = ""
+
+    if net_config["name"] == "Tron" or net_config["name"] == "Solana":
+        amount_field_query_part = "amount"
+        currency_fields_query_part = "currency { address name symbol }"
+    elif net_config["name"] == "XRP":
+        amount_field_query_part = "amountUsd: amountFrom(in: USD)" # Псевдоним для удобства обработки
+        currency_fields_query_part = "currencyFrom { address name symbol }" # Используем currencyFrom для XRP
+    else: # Для Ethereum, BSC, Polygon и других (если будут)
+        amount_field_query_part = "amountUsd" # По умолчанию пробуем amountUsd
+        currency_fields_query_part = "currency { address name symbol }"
+
+
+    fields_to_select_transfers = f"""
+        {amount_field_query_part}
+        {currency_fields_query_part}
+        {base_fields_transfers_core}
+    """
+
+    # Поля для Bitcoin outputs
     fields_bitcoin_outputs = """
         value
-        address { address annotation owner }
-        transaction {
+        outputAddress { # Изменено с 'address' на 'outputAddress'
+            address
+            annotation
+        }
+        block { # Добавлено для получения времени блока, как в примере API
+            timestamp {
+                iso8601
+            }
+        }
+        transaction { # Содержит хеш транзакции и опционально входы для определения отправителя
           hash
-          blockTimestamp
-          inputs(options: {limit:50}) { address {address annotation owner} }
-          outputs(options: {limit:50}) { address {address annotation owner} }
+          # blockTimestamp # Можно удалить, если используется block.timestamp.iso8601 выше
+          inputs(options: {limit:1}) { # Запрашиваем только 1 вход для эвристики отправителя
+            inputAddress { # Изменено с 'address' на 'inputAddress'
+                address
+                annotation
+            }
+            value # Сумма этого входа
+          }
         }
     """
 
     if net_config["type"] == "transfers":
         field_to_query_in_root = "transfers"
-        fields_to_select = fields_common_transfers
+        fields_to_select = fields_to_select_transfers
     elif net_config["type"] == "outputs":
         field_to_query_in_root = "outputs"
         fields_to_select = fields_bitcoin_outputs
     else:
         raise ValueError(f"Неизвестный тип данных: {net_config['type']}")
 
-    # В API запросе остается только аргумент date для transfers/outputs
     query_arguments_for_field = f'date: {{since: "{date_from}", till: "{date_to}"}}'
 
     if root_field == "ethereum" and network_arg_value:
-        # Используем кавычки для network_arg_value, т.к. это строковый аргумент в GraphQL
+        # Для Enum типов кавычки не нужны, значение передается как литерал
         query_body = f"""
-        {root_field}(network: \"{network_arg_value}\") {{
-          {field_to_query_in_root}({query_arguments_for_field}) {{
+        {root_field}(network: {network_arg_value}) {{
+          {field_to_query_in_root}({query_arguments_for_field}, options: {{limit: 100, desc: "{amount_field_query_part}"}}) {{ # Добавил options для сортировки и лимита
             {fields_to_select}
           }}
         }}
         """
-    else:
+    elif root_field == "ripple" and net_config["type"] == "transfers": # XRP
+        # Для XRP аргумент network также может быть нужен для корневого поля ripple
+        # и options могут отличаться
+        query_body = f"""
+        {root_field}(network: {network_arg_value or "ripple"}) {{
+          {field_to_query_in_root}({query_arguments_for_field}, options: {{limit: 100, desc: "block"}}) {{ # Пример desc по block
+            {fields_to_select}
+          }}
+        }}
+        """
+    elif root_field == "bitcoin" and net_config["type"] == "outputs": # Bitcoin
+         query_body = f"""
+        {root_field} {{
+          {field_to_query_in_root}({query_arguments_for_field}, options: {{limit: 100, desc: "value"}}) {{ # Сортировка по value
+            {fields_to_select}
+          }}
+        }}
+        """
+    else: # Tron, Solana и другие, не требующие network в корневом поле (или если network_arg не задан)
+        # Добавляем options для сортировки и лимита, если применимо
+        # Для Tron/Solana amount_field_query_part будет 'amount'
+        sort_field = amount_field_query_part if amount_field_query_part == "amount" else "block" # Примерная логика сортировки
         query_body = f"""
         {root_field} {{
-          {field_to_query_in_root}({query_arguments_for_field}) {{
+          {field_to_query_in_root}({query_arguments_for_field}, options: {{limit: 100, desc: "{sort_field}"}}) {{
             {fields_to_select}
           }}
         }}
         """
     return {"query": f"{{ {query_body} }}"}
 
+
 def get_display_name(addr_obj):
     if not addr_obj: return "???"
     addr = addr_obj.get("address")
-    owner = addr_obj.get("owner")
+    owner = addr_obj.get("owner") # 'owner' может отсутствовать для outputAddress/inputAddress
     annotation = addr_obj.get("annotation")
     if owner: return str(owner)
     if annotation: return str(annotation)
@@ -126,27 +181,37 @@ def get_whale_activity_summary(debug=False):
                 raw_list_from_api = chain_data_container.get("outputs", [])
 
             if not raw_list_from_api:
-                results.append(f"ℹ️ [{net_name}] API вернул пустой список транзакций/выходов.")
+                # Это сообщение может быть слишком частым, если нет транзакций, можно сделать менее подробным или убрать
+                # results.append(f"ℹ️ [{net_name}] API вернул пустой список транзакций/выходов.")
                 continue
 
-            # --- Локальная фильтрация ---
             locally_filtered_list = []
             if net_config["type"] == "transfers":
-                USD_FILTER_THRESHOLD = 500000.0
+                USD_FILTER_THRESHOLD = 500000.0 # Этот фильтр будет работать только для сетей, где мы получаем amountUsd
                 for tx_item in raw_list_from_api:
-                    amount_usd_str = tx_item.get("amountUsd")
-                    if amount_usd_str is not None:
+                    # Для Tron/Solana amountUsd будет None, так как мы запрашиваем 'amount'
+                    # Для XRP amountUsd - это псевдоним для amountFrom(in: USD)
+                    amount_usd_val = tx_item.get("amountUsd")
+                    
+                    if amount_usd_val is not None: # Фильтруем по USD, если есть
                         try:
-                            if float(amount_usd_str) >= USD_FILTER_THRESHOLD:
+                            if float(amount_usd_val) >= USD_FILTER_THRESHOLD:
                                 locally_filtered_list.append(tx_item)
                         except (ValueError, TypeError):
-                            pass # Игнорируем ошибки конвертации
+                            pass
+                    elif net_config["name"] in ["Tron", "Solana"]:
+                        # Для Tron и Solana amountUsd не запрашивается, поэтому локальный USD-фильтр не применяется.
+                        # Если нужна фильтрация для них, ее нужно делать на основе 'amount' и текущего курса токена.
+                        # Пока просто добавляем все, если нет USD-фильтра. Можно добавить другой тип фильтра, если нужно.
+                        locally_filtered_list.append(tx_item) # Временно добавляем все, если нет amountUsd
                 
-                # Локальная сортировка
+                # Локальная сортировка (если нужна после API сортировки)
+                # Для Tron/Solana amountUsd будет None. Сортировка по amountUsd не будет для них работать.
                 locally_filtered_list.sort(key=lambda x: float(x.get("amountUsd", 0) or 0), reverse=True)
 
+
             elif net_config["type"] == "outputs": # Bitcoin
-                BTC_FILTER_THRESHOLD = 10.0
+                BTC_FILTER_THRESHOLD = 10.0 # 10 BTC
                 for tx_item in raw_list_from_api:
                     value_btc_str = tx_item.get("value")
                     if value_btc_str is not None:
@@ -154,64 +219,91 @@ def get_whale_activity_summary(debug=False):
                             if float(value_btc_str) >= BTC_FILTER_THRESHOLD:
                                 locally_filtered_list.append(tx_item)
                         except (ValueError, TypeError):
-                            pass # Игнорируем ошибки конвертации
+                            pass
                 locally_filtered_list.sort(key=lambda x: float(x.get("value", 0) or 0), reverse=True)
             
             if not locally_filtered_list:
-                results.append(f"ℹ️ [{net_name}] Нет крупных транзакций (после локальной фильтрации и сортировки).")
+                # results.append(f"ℹ️ [{net_name}] Нет крупных транзакций (после локальной фильтрации и сортировки).")
                 continue
             
-            # --- Обработка и вывод топ-5 ---
             count = 0
             for tx_item in locally_filtered_list:
-                if count >= 5: break
-                tx_hash = tx_item.get("transaction", {}).get("hash")
-                if tx_hash and tx_hash in processed_tx_hashes: # Проверяем tx_hash на None перед добавлением
+                if count >= 5: break # Выводим топ-5 после фильтрации и сортировки
+                
+                tx_hash_obj = tx_item.get("transaction", {})
+                tx_hash = tx_hash_obj.get("hash") if tx_hash_obj else None # Для Bitcoin outputs transaction может быть None
+
+                if tx_hash and tx_hash in processed_tx_hashes:
                     continue
-                if tx_hash: # Добавляем только если хэш есть
+                if tx_hash:
                     processed_tx_hashes.add(tx_hash)
                 
                 if net_config["type"] == "transfers":
-                    currency_obj = tx_item.get("currency")
-                    symbol = currency_obj.get("symbol", "???") if currency_obj else "???"
-                    
-                    # Отображаем amountUsd, если он есть и прошел фильтр, иначе просто amount (если есть)
-                    amount_usd_val = tx_item.get("amountUsd")
                     amount_val = tx_item.get("amount")
+                    amount_usd_val = tx_item.get("amountUsd")
+
                     amount_to_display = 0.0
-                    display_currency_symbol = symbol
+                    
+                    currency_obj_retrieved = None
+                    if net_config["name"] == "XRP":
+                        currency_obj_retrieved = tx_item.get("currencyFrom")
+                    else:
+                        currency_obj_retrieved = tx_item.get("currency")
+                    
+                    display_currency_symbol = currency_obj_retrieved.get("symbol", "???") if currency_obj_retrieved else "???"
 
-                    if amount_usd_val is not None:
-                        try:
-                            amount_to_display = float(amount_usd_val)
-                            if symbol != "???":
-                                display_currency_symbol = f"USD ({symbol})"
-                            else:
-                                display_currency_symbol = "USD"
-                        except (ValueError, TypeError): # Если amountUsd не число, пробуем amount
-                            if amount_val is not None:
-                                try:
-                                    amount_to_display = float(amount_val)
-                                except (ValueError, TypeError): pass # amount тоже не число
-                            
-                    elif amount_val is not None: # amountUsd отсутствует, используем amount
-                         try:
-                            amount_to_display = float(amount_val)
-                         except (ValueError, TypeError): pass
-
+                    if net_config["name"] == "XRP":
+                        if amount_usd_val is not None:
+                            try:
+                                amount_to_display = float(amount_usd_val)
+                                original_symbol = currency_obj_retrieved.get("symbol", "???") if currency_obj_retrieved else "???"
+                                if original_symbol and original_symbol.upper() != "USD":
+                                     display_currency_symbol = f"USD (эквив. {original_symbol})"
+                                else:
+                                     display_currency_symbol = "USD"
+                            except (ValueError, TypeError): pass
+                    elif net_config["name"] == "Tron" or net_config["name"] == "Solana":
+                        if amount_val is not None:
+                            try: amount_to_display = float(amount_val)
+                            except (ValueError, TypeError): pass
+                        # display_currency_symbol уже установлен из currency.symbol
+                    else: # ETH, BSC, Polygon
+                        if amount_usd_val is not None:
+                            try:
+                                amount_to_display = float(amount_usd_val)
+                                original_symbol = currency_obj_retrieved.get("symbol", "???") if currency_obj_retrieved else "???"
+                                if original_symbol and original_symbol.upper() != "USD":
+                                    display_currency_symbol = f"USD ({original_symbol})"
+                                else:
+                                    display_currency_symbol = "USD"
+                            except (ValueError, TypeError):
+                                if amount_val is not None: # Фоллбэк на amount
+                                    try: amount_to_display = float(amount_val)
+                                    except (ValueError, TypeError): pass
+                        elif amount_val is not None:
+                             try: amount_to_display = float(amount_val)
+                             except (ValueError, TypeError): pass
+                    
                     sender_obj_raw = tx_item.get("sender")
                     receiver_obj_raw = tx_item.get("receiver")
-                    if not sender_obj_raw or not receiver_obj_raw: continue # Маловероятно после фильтрации, но для безопасности
+                    if not sender_obj_raw or not receiver_obj_raw: continue
                     
                     sender_display = get_display_name(sender_obj_raw)
                     receiver_display = get_display_name(receiver_obj_raw)
                     
-                    direction = "🔁" # Упрощенная логика ChatGPT
-                    if "exchange" in str(sender_obj_raw.get("annotation", "")).lower():
-                        direction = "💸 Вывод"
-                    elif "exchange" in str(receiver_obj_raw.get("annotation", "")).lower():
-                        direction = "🐳 Ввод"
-                    results.append(f"{direction} [{net_name}] {amount_to_display:,.0f} {display_currency_symbol}: {sender_display} → {receiver_display}")
+                    direction_emoji = "🔁"
+                    if "exchange" in str(sender_obj_raw.get("annotation", "")).lower() or \
+                       "exchange" in str(sender_obj_raw.get("owner", "")).lower(): # Проверяем и annotation, и owner
+                        direction_emoji = "💸 Вывод"
+                    elif "exchange" in str(receiver_obj_raw.get("annotation", "")).lower() or \
+                         "exchange" in str(receiver_obj_raw.get("owner", "")).lower():
+                        direction_emoji = "🐳 Ввод"
+                    
+                    # Пропускаем транзакции с нулевой суммой после всех преобразований
+                    if amount_to_display == 0:
+                        continue
+
+                    results.append(f"{direction_emoji} [{net_name}] {amount_to_display:,.0f} {display_currency_symbol}: {sender_display} → {receiver_display}")
 
                 elif net_config["type"] == "outputs": # Bitcoin
                     value_btc = 0.0
@@ -220,23 +312,28 @@ def get_whale_activity_summary(debug=False):
                         try: value_btc = float(value_btc_str)
                         except (ValueError, TypeError): pass
 
+                    if value_btc == 0: # Пропускаем нулевые выходы
+                        continue
+
                     tx_detail_obj = tx_item.get("transaction")
-                    output_address_obj = tx_item.get("address")
-                    sender_display = "Несколько входов" # Упрощенно
-                    receiver_display = get_display_name(output_address_obj)
+                    output_address_obj_from_item = tx_item.get("outputAddress")
+                    receiver_display = get_display_name(output_address_obj_from_item)
 
-                    if tx_detail_obj: # Безопасный доступ к inputs
+                    sender_display = "Новые BTC" # Bitcoin outputs often from multiple inputs or coinbase
+                    if tx_detail_obj:
                         inputs = tx_detail_obj.get("inputs", [])
-                        if inputs and inputs[0]: # Проверяем, что список не пуст и первый элемент существует
-                            first_input_addr_obj = inputs[0].get("address")
-                            # Дальнейшая логика для sender_display как в моей предыдущей версии, если нужна
-                            if first_input_addr_obj and output_address_obj and first_input_addr_obj.get("address") != output_address_obj.get("address"):
+                        if inputs and inputs[0]:
+                            first_input_addr_obj = inputs[0].get("inputAddress")
+                            if first_input_addr_obj: # Если есть информация о первом входе
                                 sender_display_candidate = get_display_name(first_input_addr_obj)
-                                if sender_display_candidate != receiver_display or receiver_display == "???":
-                                     sender_display = sender_display_candidate
+                                if sender_display_candidate != "???" and (sender_display_candidate != receiver_display or receiver_display == "???"):
+                                    sender_display = sender_display_candidate
+                                elif sender_display_candidate == "???": # Если первый вход неизвестен
+                                     sender_display = "Неизв. источник"
+                    
+                    current_tx_hash = tx_detail_obj.get("hash") if tx_detail_obj else None
 
-                    results.append(f"💸 [{net_name}] ~{value_btc:.2f} BTC: {sender_display} → {receiver_display} (Хэш: {tx_hash or 'N/A'})")
-
+                    results.append(f"💰 [{net_name}] ~{value_btc:.2f} BTC: {sender_display} → {receiver_display} (Хэш: {current_tx_hash or 'N/A'})")
                 count += 1
         
         except requests.exceptions.HTTPError as http_err:
@@ -249,11 +346,11 @@ def get_whale_activity_summary(debug=False):
             msg = f"⚠️ [{net_name}] Общая ошибка: {str(e)}"
             if debug:
                 response_text = None
-                # r_fb убран, т.к. fallback упрощен/удален из этого потока
                 if 'r' in locals() and hasattr(r, 'text'): response_text = r.text
                 if response_text: msg += f"\n   Ответ API: {response_text[:300]}"
             results.append(msg)
 
     if not results:
         return "🐋 Нет данных по крупным транзакциям после всех попыток и фильтрации."
-    return "\n".join(results)
+    # Добавляем заголовок к блоку китов
+    return "🐋 Крупные транзакции за последние 24 часа (Топ-5 по сетям):\n" + "\n".join(results)
