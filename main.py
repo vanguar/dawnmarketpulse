@@ -25,6 +25,7 @@ from metrics_reader import get_derivatives_block
 #from whale_alert_reader import get_whale_activity_summary
 from whale_alert_reader import get_whale_activity_summary
 from fng_reader import get_fear_and_greed_index_text
+from datetime import datetime, timezone, date, timedelta
 
 
 # --- Конфигурация ---
@@ -379,7 +380,12 @@ def main():
 
         full_report_final_string = "\n\n".join(valid_components)
         # Добавляем общий заголовок для всего сообщения в Telegram
-        final_telegram_message = f"⚡️ Momentum Pulse:\n\n{full_report_final_string}"
+        now_eest = datetime.utcnow() + timedelta(hours=3)
+        current_run_time_str = now_eest.strftime("%H:%M")
+        run_log = f"⏱ Скрипт запущен по расписанию (время по Киеву: {current_run_time_str})"
+
+        final_telegram_message = f"{run_log}\n\n⚡️ Momentum Pulse:\n\n{full_report_final_string}"
+
         # <<< НАЧАЛО ПРЕДЛАГАЕМОГО ДОБАВЛЕНИЯ >>>
         try:
             # Попытка получить время с указанием часового пояса из переменной окружения TZ
