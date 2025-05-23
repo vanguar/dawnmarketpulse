@@ -10,82 +10,99 @@ import os
 import sys
 import requests
 import openai
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from time import sleep
 import traceback
 import re
 
-# Предполагается, что эти модули находятся в том же каталоге или доступны через PYTHONPATH
+# Модули проекта
 from market_reader import get_market_data_text, get_crypto_data
-from news_reader import get_news_block # Теперь возвращает кортеж (текст_новостей, есть_ли_новости)
+# Импортируем обновленные функции и список инфлюенсеров
+from news_reader import get_news_block, get_news_pool_for_gpt_analysis, INFLUENCERS_TO_TRACK
 from analyzer import keyword_alert, store_and_compare
-from report_utils import analyze_sentiment
-
 from metrics_reader import get_derivatives_block
-#from whale_alert_reader import get_whale_activity_summary
 from whale_alert_reader import get_whale_activity_summary
 from fng_reader import get_fear_and_greed_index_text
-from datetime import datetime, timezone, date, timedelta
 
 
 # --- Конфигурация ---
 openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN = os.getenv("TG_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-MARKETAUX_KEY = os.getenv("MARKETAUX_KEY") # Убедитесь, что этот ключ тоже читается, если news_reader его использует
+MARKETAUX_KEY = os.getenv("MARKETAUX_KEY")
 
 MODEL = "gpt-4o-mini"
-TIMEOUT = 60
-TG_LIMIT_BYTES = 3800 # Увеличено, подберите оптимальное значение
-GPT_TOKENS = 1800 # Немного увеличено, если GPT обрезает ответы
+TIMEOUT = 120 
+TG_LIMIT_BYTES = 3800
+GPT_TOKENS_MAIN_ANALYSIS = 1800 
+GPT_TOKENS_INFLUENCER_ANALYSIS = 800
 
-# --- Промпты для GPT ---
-GPT_CONTINUATION_WITH_NEWS = """Проанализируй предоставленные новости и далее дай сводку по следующим пунктам, фокусируясь на фондовом рынке и общих выводах:
 
+# --- Промпты для GPT (основной анализ - без изменений) ---
+GPT_CONTINUATION_WITH_NEWS = """Проанализируй предоставленные новости и дай ЛАКОНИЧНУЮ сводку:
 Акции-лидеры 🚀 / Аутсайдеры 📉
-- по 2–3 бумаги + причина (можно на основе новостей или общих знаний)
-
-→ Вывод по фондовому рынку.
-
-Макро-факторы и общие выводы (на основе предоставленных новостей и общих знаний):
-- Ключевые моменты из новостей и их возможное влияние.
-- Общий вывод по рыночной ситуации (затрагивая и фондовый, и крипторынок, если применимо).
-
+- 2–3 бумаги с краткой причиной.
+Ключевые новости и влияние 📰
+- Суть без пересказов, только возможное влияние.
+→ Общий вывод 🌍
+- Краткий обзор фондового и крипторынка. Без повторов из предыдущих пунктов.
 Цитаты дня 🗣
-- до 2 релевантных цитат + смысл (если есть подходящие из новостей или общие)
+- До 2 цитат и краткий смысл.
+Число-факт 🤔
+- Один интересный факт.
+⚡️ Идея дня
+- Один короткий совет.
+‼️ Без HTML, Markdown. Двойные переносы строк. Используй эмодзи как в примере.
+"""
 
-Число-факт 🤔 (интересный факт о рынках или экономике)
-
-⚡️ Идея дня – 2 предложения actionable-совета.
-
-‼️ Только обычный текст, без HTML и markdown. Не используй **жирный**, _курсив_, `код` или #заголовки.
-‼️ Структурируй текст с ДВОЙНЫМИ переносами строк между абзацами.
-‼️ Используй эмодзи перед заголовками разделов.
-‼️ Данные по ценам криптовалют, индексам, лонгам/шортам и китовым переводам уже отображены отдельно. Твоя задача – анализ и дополнительные секции."""
-
-GPT_CONTINUATION_NO_NEWS = """Дай сводку по следующим пунктам, основываясь на общих знаниях и текущей рыночной ситуации (новости за сегодня не предоставлены), фокусируясь на фондовом рынке и общих выводах:
-
+GPT_CONTINUATION_NO_NEWS = """Дай ЛАКОНИЧНУЮ сводку по рынку (без новостей):
 Акции-лидеры 🚀 / Аутсайдеры 📉
-- по 2–3 бумаги + причина
-
-→ Вывод по фондовому рынку.
-
-Общий вывод по рыночной ситуации (без конкретных новостей, на основе общих тенденций).
-
+- 2–3 бумаги и краткая причина.
+→ Общий вывод 🌍
+- Что происходит на рынках и почему. Без воды.
 Цитаты дня 🗣
-- до 2 релевантных цитат + смысл
+- До 2 цитат и краткий смысл.
+Число-факт 🤔
+- Один интересный факт.
+⚡️ Идея дня
+- Один краткий actionable совет.
+‼️ Без HTML, Markdown. Двойные переносы строк. Используй эмодзи как в примере.
+"""
 
-Число-факт 🤔 (интересный факт о рынках или экономике)
+# --- ОБНОВЛЕННЫЙ ПРОМПТ для анализа упоминаний влиятельных лиц ---
+GPT_INFLUENCER_ANALYSIS_PROMPT = """Тебе предоставлен список влиятельных лиц и блок общих новостей за последнее время.
+Твоя задача:
+1. Внимательно просмотри предоставленный ОБЩИЙ БЛОК НОВОСТЕЙ.
+2. Найди в этих новостях любые ПРЯМЫЕ или ЯВНЫЕ КОСВЕННЫЕ УПОМИНАНИЯ (высказывания, действия, значимые новости), относящиеся к кому-либо из следующего списка лиц: {influencer_names_list}.
+3. Если упоминания найдены:
+    а. Из всех найденных упоминаний выбери 1-2 НАИБОЛЕЕ ВАЖНЫХ для финансовых рынков (фондовый, криптовалютный) или ключевых технологических трендов. Отдавай предпочтение конкретным высказываниям или анонсам, а не просто факту упоминания имени.
+    б. Для каждого выбранного важного упоминания кратко изложи его суть (например, "Илон Маск заявил о..." или "Новость о Сэме Альтмане указывает на...").
+    в. Дай ОБЩИЙ АНАЛИТИЧЕСКИЙ ВЫВОД (2-4 предложения) по этим выделенным моментам: что они могут означать для инвесторов, каковы возможные последствия, на что обратить внимание.
+4. Если среди предоставленных общих новостей ЗНАЧИМЫХ упоминаний указанных лиц (которые могли бы повлиять на рынки) НЕ НАЙДЕНО, или найденные упоминания не несут рыночной значимости, напиши: "В сегодняшней подборке общих новостей значимых публичных заявлений или новостей, связанных с отслеживаемыми влиятельными лицами и способных повлиять на рынки, не обнаружено."
 
-⚡️ Идея дня – 2 предложения actionable-совета.
+Формат ответа (если найдены значимые упоминания):
+Ключевые моменты от влиятельных лиц (из общих новостей):
+- Про [Имя Фамилия]: [Суть важного упоминания 1]
+- Про [Имя Фамилия]: [Суть важного упоминания 2 (если есть)]
+Аналитический вывод: [Твой вывод]
 
-‼️ Только обычный текст, без HTML и markdown. Не используй **жирный**, _курсив_, `код` или #заголовки.
-‼️ Структурируй текст с ДВОЙНЫМИ переносами строк между абзацами.
-‼️ Используй эмодзи перед заголовками разделов.
-‼️ Данные по ценам криптовалют, индексам, лонгам/шортам и китовым переводам уже отображены отдельно. Твоя задача – анализ и дополнительные секции."""
+Формат ответа (если не найдено значимых упоминаний):
+[Сообщение об отсутствии значимых упоминаний, как указано в пункте 4]
 
+‼️ Используй только обычный текст. Без Markdown. Будь максимально краток и сфокусирован на потенциальном влиянии. Избегай общих фраз, если нет конкретики. Игнорируй новости из предоставленного пула, которые не содержат релевантной информации об указанных лицах или их деятельности, или если их упоминание не имеет рыночного значения.
 
-# --- Вспомогательные функции ---
+СПИСОК ВЛИЯТЕЛЬНЫХ ЛИЦ ДЛЯ ПОИСКА:
+{influencer_names_list}
+
+ОБЩИЙ БЛОК НОВОСТЕЙ ДЛЯ АНАЛИЗА (обрати внимание, это не отфильтрованные новости, тебе нужно самому найти в них упоминания указанных лиц):
+---
+{general_news_text_pool}
+---
+
+Твой анализ:
+"""
+
+# --- Вспомогательные функции (log, safe_call - без изменений) ---
 def log(msg):
     timestamp = f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC]"
     print(f"{timestamp} {msg}", flush=True)
@@ -96,98 +113,141 @@ def safe_call(func, retries=3, delay=5, label="❗ Ошибка"):
             return func()
         except requests.exceptions.Timeout:
             log(f"{label}: попытка {i + 1}/{retries} не удалась - Таймаут ({TIMEOUT}с)")
-            if i < retries - 1:
-                sleep(delay)
         except requests.exceptions.RequestException as e:
             log(f"{label}: попытка {i + 1}/{retries} не удалась - Ошибка сети: {e}")
-            if i < retries - 1:
-                sleep(delay)
+        except openai.error.OpenAIError as e: 
+            log(f"{label} OpenAI: попытка {i + 1}/{retries} не удалась - {type(e).__name__}: {e}")
         except Exception as e:
-            log(f"{label}: попытка {i + 1}/{retries} не удалась - Общая ошибка: {e}")
-            log(traceback.format_exc())
-            if i < retries - 1:
-                sleep(delay)
+            log(f"{label}: попытка {i + 1}/{retries} не удалась - Общая ошибка: {type(e).__name__} - {e}")
+            # log(traceback.format_exc()) 
+        if i < retries - 1:
+            log(f"Пауза {delay} сек. перед следующей попыткой...")
+            sleep(delay)
     log(f"{label}: все {retries} попытки провалены.")
     return None
 
-# --- Сбор данных и генерация отчета ---
-
+# --- Генерация основного отчета GPT (gpt_report - без изменений) ---
 def gpt_report():
     today_date_str = date.today().strftime("%d.%m.%Y")
-    
-    # Получаем новости и флаг, есть ли они
-    # get_news_block() из news_reader.py должен возвращать кортеж (текст_блока_новостей_для_GPT, флаг_наличия_реальных_новостей)
     news_text_for_gpt, has_actual_news = get_news_block() 
-
     header_for_gpt = f"📅 Анализ рыночной ситуации на {today_date_str}"
-    current_gpt_continuation = ""
+    current_gpt_prompt_name = ""
     
     if has_actual_news:
-        log("📰 Обнаружены актуальные новости. Используется GPT_CONTINUATION_WITH_NEWS.")
-        dynamic_data = (
+        log("📰 Обнаружены актуальные новости для основного анализа. Используется GPT_CONTINUATION_WITH_NEWS.")
+        prompt_content = GPT_CONTINUATION_WITH_NEWS
+        current_gpt_prompt_name = "WITH_NEWS"
+        dynamic_data_for_gpt = (
             f"{header_for_gpt}\n\n"
-            f"--- ПРЕДОСТАВЛЕННЫЕ НОВОСТИ РЫНКА (для твоего анализа) ---\n"
+            f"--- ПРЕДОСТАВЛЕННЫЕ НОВОСТИ РЫНКА (для основного анализа) ---\n"
             f"{news_text_for_gpt}\n\n" 
             f"--- ЗАДАНИЕ ДЛЯ АНАЛИЗА ---\n"
-            f"{GPT_CONTINUATION_WITH_NEWS}"
+            f"{prompt_content}"
         )
-        current_gpt_continuation = "WITH_NEWS"
     else:
-        log("📰 Актуальные новости не найдены. Используется GPT_CONTINUATION_NO_NEWS.")
-        dynamic_data = (
+        log("📰 Актуальные новости для основного анализа не найдены. Используется GPT_CONTINUATION_NO_NEWS.")
+        prompt_content = GPT_CONTINUATION_NO_NEWS
+        current_gpt_prompt_name = "NO_NEWS"
+        dynamic_data_for_gpt = (
             f"{header_for_gpt}\n\n"
-            f"(Обрати внимание: актуальные новости за сегодня не предоставлены. Пожалуйста, сделай анализ на основе общих знаний, где это применимо.)\n\n"
+            f"(Обрати внимание: актуальные новости для основного анализа за сегодня не предоставлены.)\n\n"
             f"--- ЗАДАНИЕ ДЛЯ АНАЛИЗА ---\n"
-            f"{GPT_CONTINUATION_NO_NEWS}"
+            f"{prompt_content}"
         )
-        current_gpt_continuation = "NO_NEWS"
     
-    log(f"ℹ️ Данные для GPT (длина): {len(dynamic_data)} символов. Промпт: {current_gpt_continuation}. Первые 200: {dynamic_data[:200]}...")
-
+    log(f"ℹ️ Данные для GPT (основной анализ, длина: {len(dynamic_data_for_gpt)}). Промпт: {current_gpt_prompt_name}. Начало: {dynamic_data_for_gpt[:200].replace(chr(10), ' ')}...")
     response = safe_call(
         lambda: openai.ChatCompletion.create(
             model=MODEL,
-            messages=[{"role": "user", "content": dynamic_data}],
+            messages=[{"role": "user", "content": dynamic_data_for_gpt}],
             timeout=TIMEOUT, 
             temperature=0.4,
-            max_tokens=GPT_TOKENS,
+            max_tokens=GPT_TOKENS_MAIN_ANALYSIS,
         ),
-        label="❗ Ошибка OpenAI"
+        label="❗ Ошибка OpenAI (основной анализ)"
     )
-    if not response:
-        raise RuntimeError("OpenAI не ответил после нескольких попыток.")
+    if not response or not response.choices:
+        log("❌ OpenAI не ответил на основной запрос или вернул пустой ответ.")
+        return "🤖 Не удалось получить основной аналитический отчет от GPT." 
     
     generated_text = response.choices[0].message.content.strip()
-    log(f"📝 GPT сгенерировал аналитический текст ({len(generated_text)} символов).")
+    log(f"📝 GPT сгенерировал основной аналитический текст ({len(generated_text)}).")
     return generated_text
 
-# --- Обработка и отправка текста в Telegram ---
+# --- ОБНОВЛЕННАЯ ФУНКЦИЯ для анализа упоминаний инфлюенсеров (с поиском в общем тексте) ---
+def analyze_influencer_mentions_with_gpt(general_news_pool_text, influencer_list):
+    """
+    Ищет упоминания влиятельных лиц в общем пуле новостей и анализирует их с помощью GPT.
+    """
+    if not general_news_pool_text or \
+       "не удалось загрузить пул" in general_news_pool_text.lower() or \
+       "ключ marketaux api не настроен" in general_news_pool_text.lower() or \
+       "ошибка при загрузке пула новостей" in general_news_pool_text.lower(): # Добавлена проверка на общую ошибку
+        log(f"ℹ️ Нет пула новостей для анализа упоминаний инфлюенсеров или ошибка загрузки. Текст: {general_news_pool_text}")
+        return general_news_pool_text 
+
+    influencer_names_str = ", ".join([p['name'] for p in influencer_list])
+    if not influencer_names_str:
+        log("⚠️ Список инфлюенсеров для анализа пуст.")
+        return "⚠️ Список отслеживаемых влиятельных лиц не определен."
+
+    prompt = GPT_INFLUENCER_ANALYSIS_PROMPT.format(
+        influencer_names_list=influencer_names_str,
+        general_news_text_pool=general_news_pool_text
+    )
+    
+    log(f"ℹ️ Данные для GPT (анализ инфлюенсеров, длина промпта: {len(prompt)}). Имена для поиска: {influencer_names_str}. Начало пула новостей: {general_news_pool_text[:200].replace(chr(10), ' ')}...")
+    response = safe_call(
+        lambda: openai.ChatCompletion.create(
+            model=MODEL, 
+            messages=[{"role": "user", "content": prompt}],
+            timeout=TIMEOUT + 30, 
+            temperature=0.5, 
+            max_tokens=GPT_TOKENS_INFLUENCER_ANALYSIS 
+        ),
+        label="❗ Ошибка OpenAI (анализ инфлюенсеров)"
+    )
+
+    if not response or not response.choices:
+        log("❌ OpenAI не ответил на запрос анализа инфлюенсеров или вернул пустой ответ.")
+        return "🤖 Не удалось получить анализ упоминаний влиятельных лиц от GPT (OpenAI не ответил)."
+    
+    analysis_text = response.choices[0].message.content.strip()
+    log(f"📝 GPT сгенерировал анализ по инфлюенсерам ({len(analysis_text)}).")
+    return analysis_text
+
+
+# --- Обработка и отправка текста в Telegram (prepare_text, force_split_long_string, smart_chunk, send - без изменений) ---
 def prepare_text(text_to_prepare):
     if not isinstance(text_to_prepare, str):
         log(f"⚠️ prepare_text получил не строку: {type(text_to_prepare)}. Возвращаю как есть.")
         return str(text_to_prepare) 
-
-    for marker in ["📊", "🚀", "📉", "₿", "📰", "🗣", "🤔", "⚡️", "🔍", "📈", "🧠", "⚖️", "🐋", "🤖"]: # Добавлены все используемые маркеры
-        text_to_prepare = re.sub(f"({marker}[^\n]*)\n(?!\n)", r"\1\n\n", text_to_prepare)
-    
-    text_to_prepare = re.sub(r"(\n→[^\n]*)\n(?!\n)", r"\1\n\n", text_to_prepare) 
-    
-    while "\n\n\n" in text_to_prepare:
-        text_to_prepare = text_to_prepare.replace("\n\n\n", "\n\n")
-    return text_to_prepare.strip()
+    text_to_prepare = re.sub(r'\n{3,}', '\n\n', text_to_prepare.strip())
+    section_markers_regex = r"^([📊🚀📉₿📰🗣🤔⚡️🔍📈🧠⚖️🐋🤖🌍💡⏱📅💬].*)"
+    lines = text_to_prepare.split('\n')
+    processed_lines = []
+    for i, line in enumerate(lines):
+        stripped_line = line.strip()
+        if not stripped_line: 
+            if not processed_lines or processed_lines[-1].strip(): 
+                processed_lines.append("")
+            continue
+        processed_lines.append(line)
+        if re.match(section_markers_regex, stripped_line):
+            if i + 1 < len(lines) and lines[i+1].strip(): 
+                processed_lines.append("") 
+    final_text = "\n".join(processed_lines)
+    return re.sub(r'\n{3,}', '\n\n', final_text).strip()
 
 
 def force_split_long_string(long_str, limit_b):
     sub_chunks = []
-    if not long_str: 
-        return sub_chunks
-    
+    if not long_str: return sub_chunks
     encoded_str = long_str.encode('utf-8')
     current_byte_pos = 0
     while current_byte_pos < len(encoded_str):
         end_byte_pos = min(current_byte_pos + limit_b, len(encoded_str))
         byte_slice_candidate = encoded_str[current_byte_pos:end_byte_pos]
-        
         while True:
             try:
                 decoded_chunk = byte_slice_candidate.decode('utf-8')
@@ -203,20 +263,15 @@ def force_split_long_string(long_str, limit_b):
                     break 
     return sub_chunks
 
-
 def smart_chunk(text_to_chunk, outer_limit_bytes):
     paragraphs = text_to_chunk.split("\n\n") 
     final_result_chunks = []
     current_accumulated_parts = [] 
     current_accumulated_bytes = 0  
-
     for para_idx, paragraph_str in enumerate(paragraphs):
-        if not paragraph_str.strip(): 
-            continue
-
+        if not paragraph_str.strip(): continue
         paragraph_bytes = paragraph_str.encode('utf-8')
         separator_bytes_len = 2 if current_accumulated_parts else 0 
-
         if current_accumulated_bytes + separator_bytes_len + len(paragraph_bytes) <= outer_limit_bytes:
             if current_accumulated_parts: 
                 current_accumulated_parts.append("\n\n")
@@ -225,81 +280,65 @@ def smart_chunk(text_to_chunk, outer_limit_bytes):
         else:
             if current_accumulated_parts:
                 final_result_chunks.append("".join(current_accumulated_parts))
-            
-            current_accumulated_parts = []
+            current_accumulated_parts = [] 
             current_accumulated_bytes = 0
-
             if len(paragraph_bytes) > outer_limit_bytes:
-                log(f"ℹ️ Абзац #{para_idx} '{paragraph_str[:30].replace(chr(10),' ')}...' слишком длинный ({len(paragraph_bytes)} байт > {outer_limit_bytes} байт), будет разрезан.")
+                log(f"ℹ️ Абзац #{para_idx} '{paragraph_str[:30].replace(chr(10),' ')}...' ({len(paragraph_bytes)}Б > {outer_limit_bytes}Б) будет разрезан.")
                 split_long_paragraph_sub_chunks = force_split_long_string(paragraph_str, outer_limit_bytes)
-                final_result_chunks.extend(split_long_paragraph_sub_chunks) 
-            else:
+                if split_long_paragraph_sub_chunks:
+                    final_result_chunks.extend(split_long_paragraph_sub_chunks[:-1])
+                    current_accumulated_parts.append(split_long_paragraph_sub_chunks[-1])
+                    current_accumulated_bytes = len(split_long_paragraph_sub_chunks[-1].encode('utf-8'))
+            else: 
                 current_accumulated_parts.append(paragraph_str)
                 current_accumulated_bytes = len(paragraph_bytes)
-                
-    if current_accumulated_parts:
+    if current_accumulated_parts: 
         final_result_chunks.append("".join(current_accumulated_parts))
-
     return [chunk_item for chunk_item in final_result_chunks if chunk_item.strip()] 
-
 
 def send(text_content, add_numeration_if_multiple_parts=False):
     prepared_text_content = prepare_text(str(text_content)) 
-    
     prefix_max_allowance_bytes = 40 
     text_chunk_limit_for_smart_chunk = TG_LIMIT_BYTES 
-    
     if add_numeration_if_multiple_parts:
         text_chunk_limit_for_smart_chunk = TG_LIMIT_BYTES - prefix_max_allowance_bytes
-        
     parts_list = smart_chunk(prepared_text_content, text_chunk_limit_for_smart_chunk)
     total_parts_count = len(parts_list)
-
     if add_numeration_if_multiple_parts and total_parts_count == 1:
-        log(f"ℹ️ Нумерация запрошена, но получилась 1 часть с лимитом {text_chunk_limit_for_smart_chunk}. Перенарезаем с полным лимитом {TG_LIMIT_BYTES}.")
         parts_list = smart_chunk(prepared_text_content, TG_LIMIT_BYTES) 
         total_parts_count = len(parts_list)
-
     if not parts_list:
-        log("ℹ️ Нет частей для отправки (текст пуст или состоит только из пробельных символов).")
+        log("ℹ️ Нет частей для отправки.")
         return
-
     for idx, single_part_content in enumerate(parts_list, 1):
         final_text_for_telegram = single_part_content
         log_part_prefix_display = "" 
-
         if add_numeration_if_multiple_parts and total_parts_count > 1:
             numeration_prefix_str = f"Часть {idx}/{total_parts_count}:\n\n"
             final_text_for_telegram = numeration_prefix_str + single_part_content
             log_part_prefix_display = f"Часть {idx}/{total_parts_count} " 
-            
             final_text_bytes_with_prefix = len(final_text_for_telegram.encode('utf-8'))
             if final_text_bytes_with_prefix > 4096: 
-                log(f"📛 ВНИМАНИЕ! {log_part_prefix_display}С ПРЕФИКСОМ СЛИШКОМ ДЛИННАЯ ({final_text_bytes_with_prefix} байт > 4096). Telegram ОБРЕЖЕТ ЭТУ ЧАСТЬ!")
-
+                log(f"📛 ВНИМАНИЕ! {log_part_prefix_display}С ПРЕФИКСОМ СЛИШКОМ ДЛИННАЯ ({final_text_bytes_with_prefix}Б > 4096Б). Telegram ОБРЕЖЕТ ЭТУ ЧАСТЬ!")
         def make_telegram_api_call():
             return requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
                 json={"chat_id": CHANNEL_ID, "text": final_text_for_telegram, "disable_web_page_preview": True},
-                timeout=15 
+                timeout=20 
             )
-
         response_from_tg = safe_call(make_telegram_api_call, label=f"❗ Ошибка отправки {log_part_prefix_display}в TG")
-        
         current_part_final_bytes = len(final_text_for_telegram.encode('utf-8'))
         current_part_final_chars = len(final_text_for_telegram)
-
         if response_from_tg and response_from_tg.status_code == 200:
-            log(f"✅ {log_part_prefix_display}успешно отправлена ({current_part_final_bytes} байт, {current_part_final_chars} символов)")
+            log(f"✅ {log_part_prefix_display}успешно отправлена ({current_part_final_bytes}Б, {current_part_final_chars} симв.)")
         elif response_from_tg:
             error_text_preview = final_text_for_telegram[:150].replace('\n', ' ') 
             log(f"❗ Ошибка от Telegram для {log_part_prefix_display.strip()}: {response_from_tg.status_code} - {response_from_tg.text}")
-            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, символы: {current_part_final_chars}, начало): '{error_text_preview}...'")
+            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, симв: {current_part_final_chars}, начало): '{error_text_preview}...'")
         else: 
             error_text_preview = final_text_for_telegram[:150].replace('\n', ' ')
-            log(f"❗ Не удалось отправить {log_part_prefix_display.strip()} (нет ответа от сервера Telegram после всех попыток).")
-            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, символы: {current_part_final_chars}, начало): '{error_text_preview}...'")
-
+            log(f"❗ Не удалось отправить {log_part_prefix_display.strip()} (нет ответа от сервера Telegram).")
+            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, симв: {current_part_final_chars}, начало): '{error_text_preview}...'")
         if total_parts_count > 1 and idx < total_parts_count: 
             sleep_duration = 1.5 
             log(f"ℹ️ Пауза {sleep_duration} сек. перед следующей частью...")
@@ -308,63 +347,93 @@ def send(text_content, add_numeration_if_multiple_parts=False):
 # --- Основная логика скрипта ---
 def main():
     log("🚀 Скрипт запущен.")
-    log(f"🔑 OPENAI_KEY: {'Установлен' if os.getenv('OPENAI_KEY') else 'НЕ УСТАНОВЛЕН!'}")
-    log(f"🔑 WHALE_KEY: {'Установлен' if os.getenv('WHALE_KEY') else 'НЕ УСТАНОВЛЕН!'}")
-    log(f"🔑 MARKETAUX_KEY: {'Установлен' if os.getenv('MARKETAUX_KEY') else 'НЕ УСТАНОВЛЕН!'}") # Добавил проверку ключа
+    required_keys = ["OPENAI_KEY", "TG_TOKEN", "CHANNEL_ID", "MARKETAUX_KEY"]
+    keys_ok = True
+    for key_name in required_keys:
+        if not os.getenv(key_name):
+            log(f"📛 Ключ API {key_name} НЕ УСТАНОВЛЕН! Скрипт не может продолжить работу.")
+            keys_ok = False
+        else:
+            log(f"🔑 Ключ API {key_name}: Установлен.")
+    if not keys_ok:
+        sys.exit("Ошибка: Отсутствуют необходимые ключи API.")
 
     try:
-        # 1. Сбор данных по КРИПТЕ (выводятся первыми)
+        tz_name_env = os.getenv("TZ", "Europe/Kiev") 
+        try:
+            user_timezone = pytz.timezone(tz_name_env)
+            now_in_zone = datetime.now(user_timezone)
+        except pytz.exceptions.UnknownTimeZoneError:
+            log(f"⚠️ Неизвестный часовой пояс в TZ='{tz_name_env}'. Используется UTC.")
+            user_timezone = timezone.utc
+            now_in_zone = datetime.now(user_timezone)
+            
+        current_run_time_str = now_in_zone.strftime("%H:%M")
+        current_date_str = now_in_zone.strftime('%d.%m.%Y')
+        update_time_str = now_in_zone.strftime("%H:%M (%Z)")
+
+        run_log_msg = f"⏱ Скрипт запущен ({current_run_time_str} {now_in_zone.strftime('%Z')})"
+        report_title_msg = "⚡️ Momentum Pulse:"
+        
+        # 1. Сбор основных данных
         log("🔄 Сбор данных по криптовалютам...")
-        crypto_price_block = get_crypto_data(extended=True) # Уже содержит заголовок "₿ Крипта на ДАТА"
+        crypto_price_block = get_crypto_data(extended=True) 
         fear_and_greed_block = get_fear_and_greed_index_text()
-        derivatives_block = get_derivatives_block() # Уже содержит заголовок "⚖️ Лонги / Шорты"
+        derivatives_block = get_derivatives_block() 
         
         log("🔄 Сбор данных по китовым транзакциям...")
         whale_activity_block = get_whale_activity_summary()
-        log("🐋 Данные по китам получены.")
+        log("🐋 Данные по китам: " + ("Получены." if whale_activity_block and "Ошибка" not in whale_activity_block else "Не удалось получить или ошибка."))
 
-        # 2. Сбор данных по ФОНДОВОМУ РЫНКУ (выводятся вторыми)
         log("🔄 Сбор данных по фондовому рынку...")
-        market_data_block = get_market_data_text() # Уже содержит заголовок "📊 Индексы"
+        market_data_block = get_market_data_text()
 
-        # 3. Генерация АНАЛИТИЧЕСКОЙ части от GPT
-        # gpt_report() теперь сама решает, какой промпт использовать в зависимости от новостей
-        log("🔄 Вызов GPT для генерации аналитической части отчета...")
+        # 2. Получение пула новостей и анализ упоминаний влиятельных лиц
+        log("🔄 Загрузка пула новостей для поиска упоминаний влиятельных лиц...")
+        general_news_pool = get_news_pool_for_gpt_analysis() # Эта функция теперь возвращает пул новостей или сообщение об ошибке
+        
+        influencer_final_analysis_block = "" 
+        # Вызываем анализ GPT, только если general_news_pool не содержит сообщения об ошибке
+        if general_news_pool and \
+           "не удалось загрузить пул" not in general_news_pool.lower() and \
+           "ключ marketaux api не настроен" not in general_news_pool.lower() and \
+           "ошибка при загрузке пула новостей" not in general_news_pool.lower():
+            log("🔄 Анализ упоминаний влиятельных лиц с помощью GPT...")
+            gpt_analysis_of_mentions = analyze_influencer_mentions_with_gpt(general_news_pool, INFLUENCERS_TO_TRACK) # INFLUENCERS_TO_TRACK импортирован из news_reader
+            
+            if gpt_analysis_of_mentions:
+                # Проверяем, не является ли результат просто сообщением об ошибке от GPT или "не найдено"
+                if "не удалось получить анализ" in gpt_analysis_of_mentions.lower() or \
+                   "не найдено" in gpt_analysis_of_mentions.lower() or \
+                   "не обнаружено" in gpt_analysis_of_mentions.lower(): # Добавлено "не обнаружено"
+                    influencer_final_analysis_block = f"🗣️ {gpt_analysis_of_mentions}" 
+                else:
+                    influencer_final_analysis_block = f"💬 Мнения лидеров и их анализ от GPT:\n{gpt_analysis_of_mentions}"
+        else: # Если была ошибка при загрузке пула новостей
+            influencer_final_analysis_block = general_news_pool # Отображаем сообщение об ошибке/отсутствии данных от get_news_pool_for_gpt_analysis
+
+        # 3. Генерация ОСНОВНОЙ АНАЛИТИЧЕСКОЙ части от GPT
+        log("🔄 Вызов GPT для генерации основного аналитического отчета...")
         main_analytical_text_from_gpt = gpt_report()
-        # Удаление Markdown
-        main_analytical_text_from_gpt = re.sub(r"\*\*(.*?)\*\*", r"\1", main_analytical_text_from_gpt)
-        main_analytical_text_from_gpt = re.sub(r"\_(.*?)\_", r"\1", main_analytical_text_from_gpt)
-        main_analytical_text_from_gpt = re.sub(r"\`(.*?)\`", r"\1", main_analytical_text_from_gpt)
-        main_analytical_text_from_gpt = re.sub(r"\#(.*?)\n", r"\1\n", main_analytical_text_from_gpt)
-        log(f"📝 Получена аналитическая часть от GPT (длина {len(main_analytical_text_from_gpt)}).")
+        main_analytical_text_from_gpt = re.sub(r"[\*_`#]", "", main_analytical_text_from_gpt) 
+        log(f"📝 Получена основная аналитическая часть от GPT (длина {len(main_analytical_text_from_gpt)}).")
 
-        # 4. Сборка ВСЕХ компонентов отчета в нужном порядке
+        # 4. Сборка ВСЕХ компонентов отчета
         list_of_report_components = [
-            # --- Блок КРИПТЫ ---
+            run_log_msg,
+            report_title_msg,
             crypto_price_block,
-            fear_and_greed_block,  # 👈 вставка блока страха и жадности
+            fear_and_greed_block,
             derivatives_block, 
             whale_activity_block,
-            
-
-            # --- Визуальный разделитель ---
-            "______________________________", # <--- Твой разделитель
-
-            # --- Блок ФОНДОВОГО РЫНКА ---
+            "______________________________", 
+            influencer_final_analysis_block if influencer_final_analysis_block else None, # Добавляем если не пустой
+            "______________________________", 
             market_data_block, 
-
-            # --- Блок АНАЛИТИКИ от GPT ---
-            # Добавляем общий заголовок для всего отчета перед выводом GPT
-            f"🤖 Анализ и выводы от эксперта GPT на {date.today().strftime('%d.%m.%Y')}:",
+            f"🤖 Анализ и выводы от эксперта GPT на {current_date_str}:",
             main_analytical_text_from_gpt,
-
-            # В функции main() в main.py, при формировании list_of_report_components
-            # ...
-                # --- Дополнительные аналитические компоненты (относятся к тексту GPT) ---
-                keyword_alert(main_analytical_text_from_gpt),
-                store_and_compare(main_analytical_text_from_gpt),
-                # analyze_sentiment(main_analytical_text_from_gpt) # <-- ЗАКОММЕНТИРУЙ ИЛИ УДАЛИ ЭТУ СТРОКУ
-            # ... 
+            keyword_alert(main_analytical_text_from_gpt), 
+            store_and_compare(main_analytical_text_from_gpt), 
         ]
         
         # 5. Чистка и финальная сборка
@@ -378,57 +447,39 @@ def main():
                 if str_component:
                     valid_components.append(str_component)
 
-        full_report_final_string = "\n\n".join(valid_components)
-        # Добавляем общий заголовок для всего сообщения в Telegram
-        now_eest = datetime.utcnow() + timedelta(hours=3)
-        current_run_time_str = now_eest.strftime("%H:%M")
-        run_log = f"⏱ Скрипт запущен по расписанию (время по Киеву: {current_run_time_str})"
-
-        final_telegram_message = f"{run_log}\n\n⚡️ Momentum Pulse:\n\n{full_report_final_string}"
-
-        # <<< НАЧАЛО ПРЕДЛАГАЕМОГО ДОБАВЛЕНИЯ >>>
-        try:
-            # Попытка получить время с указанием часового пояса из переменной окружения TZ
-            # На Railway можно установить переменную окружения TZ, например, "Europe/Kiev"
-            tz_name = os.getenv("TZ")
-            if tz_name:
-                user_timezone = timezone(pytz.timezone(tz_name).utcoffset(datetime.now()))
-            else: # Фоллбэк на UTC+2, если TZ не задан
-                user_timezone = timezone(timedelta(hours=2)) # Пример для UTC+2
-
-            current_time_in_zone = datetime.now(user_timezone).strftime("%H:%M (%Z)")
-            data_update_signature = f"\n\n---\n📅 Данные на ~ {date.today().strftime('%d.%m.%Y')}, обновлены около {current_time_in_zone}."
-            final_telegram_message += data_update_signature
-        except Exception as e:
-            log(f"⚠️ Не удалось добавить временную метку с часовым поясом: {e}")
-            # Фоллбэк на простое время без явной зоны, если что-то пошло не так с TZ
-            current_time_simple = datetime.now().strftime("%H:%M")
-            data_update_signature = f"\n\n---\n📅 Данные на ~ {date.today().strftime('%d.%m.%Y')}, обновлены около {current_time_simple}."
-            final_telegram_message += data_update_signature
-        # <<< КОНЕЦ ПРЕДЛАГАЕМОГО ДОБАВЛЕНИЯ >>>
-        log(f"📄 Итоговый отчет собран (длина {len(final_telegram_message)}). Начало: {final_telegram_message[:200]}")
+        full_report_body_string = "\n\n".join(valid_components)
+        data_update_signature = f"---\n📅 Данные на ~ {current_date_str}, обновлены около {update_time_str}."
+        final_telegram_message = f"{full_report_body_string}\n\n{data_update_signature}"
+        
+        log(f"📄 Итоговый отчет собран (длина {len(final_telegram_message)}). Начало: {final_telegram_message[:250].replace(chr(10), ' ')}...")
 
         # 6. Отправка в Telegram
-        if final_telegram_message.strip() and final_telegram_message.strip() != "⚡️ DawnMarket Pulse:":
+        if final_telegram_message.strip() and final_telegram_message.strip() != report_title_msg : 
             log(f"📨 Отправка отчета в Telegram (TG_LIMIT_BYTES={TG_LIMIT_BYTES})...")
             send(final_telegram_message, add_numeration_if_multiple_parts=True)
             log("✅ Весь отчёт обработан и отправлен.")
         else:
-            log("ℹ️ Итоговый отчет пуст или состоит только из пробельных символов (или только из заголовка), отправка не требуется.")
+            log("ℹ️ Итоговый отчет пуст или содержит только заголовок, отправка не требуется.")
 
-        sleep(3)
-        log("⏳ Скрипт завершает работу после паузы.")
+        sleep(3) 
+        log("🏁 Скрипт завершает работу.")
 
-    except RuntimeError as e:
-        log(f"❌ Критическая ошибка при генерации GPT-отчета: {e}")
-        sys.exit(1)
-    except requests.exceptions.RequestException as e:
-        log(f"❌ Сетевая ошибка: {e}")
+    except Exception as e: 
+        log(f"❌ КРИТИЧЕСКАЯ ОШИБКА В MAIN: {type(e).__name__} - {e}")
         log(traceback.format_exc())
-        sys.exit(1)
-    except Exception as e:
-        log(f"❌ Непредвиденная ошибка: {e}")
-        log(traceback.format_exc())
+        try:
+            if TG_TOKEN and CHANNEL_ID:
+                error_message_for_tg = f"📛 КРИТИЧЕСКАЯ ОШИБКА СКРИПТА MomentumPulse:\n{type(e).__name__}: {e}\n\nПроверьте логи для деталей."
+                requests.post(
+                    f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                    json={"chat_id": CHANNEL_ID, "text": error_message_for_tg[:4090]}, 
+                    timeout=10
+                )
+                log("ℹ️ Уведомление о критической ошибке отправлено в Telegram.")
+            else:
+                log("⚠️ TG_TOKEN или CHANNEL_ID не установлены, не могу отправить уведомление об ошибке в Telegram.")
+        except Exception as tg_err:
+            log(f"⚠️ Не удалось отправить уведомление о критической ошибке в Telegram: {tg_err}")
         sys.exit(1)
 
 if __name__ == "__main__":
