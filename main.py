@@ -465,7 +465,7 @@ def main():
             f"🤖 Анализ и выводы от эксперта GPT на {current_date_str}:",
             main_analytical_text_from_gpt, # Здесь будет уже дедуплицированный текст
             keyword_alert(main_analytical_text_from_gpt), 
-            store_and_compare(main_analytical_text_from_gpt), 
+            #store_and_compare(main_analytical_text_from_gpt), 
         ]
         
         # 5. Чистка и финальная сборка
