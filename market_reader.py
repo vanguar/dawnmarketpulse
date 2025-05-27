@@ -105,7 +105,7 @@ def get_crypto_data(extended=False):
                 
                 market_cap_formatted = f"(кап: {format_large_number(market_cap)})" if market_cap else ""
 
-                top_coins_lines.append(f"  {emoji} {symbol}: {price_format} ({change_24h:+.2f}%) {market_cap_formatted}")
+                top_coins_lines.append(f"  {emoji} <b>{symbol}</b>: {price_format} ({change_24h:+.2f}%) {market_cap_formatted}")
 
                 if extended and symbol not in STABLECOINS_TO_SKIP_ANALYSIS:
                     if abs(change_24h) >= 7:

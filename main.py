@@ -328,7 +328,7 @@ def send(text_content, add_numeration_if_multiple_parts=False):
         def make_telegram_api_call():
             return requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": CHANNEL_ID, "text": final_text_for_telegram, "disable_web_page_preview": True},
+                json={"chat_id": CHANNEL_ID, "text": final_text_for_telegram, "disable_web_page_preview": True, "parse_mode": "HTML"},
                 timeout=20 
             )
         response_from_tg = safe_call(make_telegram_api_call, label=f"❗ Ошибка отправки {log_part_prefix_display}в TG")
@@ -479,7 +479,7 @@ def main():
                 if str_component:
                     valid_components.append(str_component)
 
-        full_report_body_string = "\n\n".join(valid_components)
+        full_report_body_string = "\n".join(valid_components)
         data_update_signature = f"---\n📅 Данные на ~ {current_date_str}, обновлены около {update_time_str}."
         final_telegram_message = f"{full_report_body_string}\n\n{data_update_signature}"
         
