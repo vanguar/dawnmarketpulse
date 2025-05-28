@@ -35,7 +35,15 @@ def get_global_crypto_market_data_text():
         market_cap_change_24h = global_data.get("market_cap_change_percentage_24h_usd", 0)
 
         total_market_cap_formatted = format_large_number(total_market_cap)
-        change_formatted = f"{market_cap_change_24h:+.2f}%" if market_cap_change_24h is not None else "N/A"
+        
+        change_emoji = "" # Инициализируем пустой строкой
+        if market_cap_change_24h is not None:
+            if market_cap_change_24h > 0:
+                change_emoji = "🟢 " # Пробел после эмодзи для отделения от числа
+            elif market_cap_change_24h < 0:
+                change_emoji = "🔴 " # Пробел после эмодзи
+                
+        change_formatted = f"{change_emoji}{market_cap_change_24h:+.2f}%" if market_cap_change_24h is not None else "N/A"
 
         return (f"🌍 Общая капитализация крипторынка: {total_market_cap_formatted}\n"
                 f"   Изменение за 24ч (глобально): {change_formatted}")
@@ -64,7 +72,6 @@ def get_crypto_data(extended=False):
     # 2. Получаем данные по топ-10 криптовалютам
     try:
         today_date_str = date.today().strftime("%d.%m.%Y")
-        # Добавляем 'market_cap' в запрос, хотя он обычно и так есть по умолчанию
         coins_url = (
             f"{COINGECKO_API_BASE_URL}/coins/markets"
             "?vs_currency=usd"
@@ -73,7 +80,6 @@ def get_crypto_data(extended=False):
             "&page=1"
             "&sparkline=false"
             "&price_change_percentage=24h"
-            # "&market_cap=true" # Это не параметр, market_cap уже включен
         )
 
         r_coins = requests.get(coins_url, timeout=15, headers=COINGECKO_HEADERS)
@@ -104,38 +110,43 @@ def get_crypto_data(extended=False):
                 else: price_format = f"${price:,.2f}"
                 
                 market_cap_formatted = f"(кап: {format_large_number(market_cap)})" if market_cap else ""
+                
+                change_color_emoji = "" # Инициализируем пустой строкой
+                if change_24h is not None: 
+                    if change_24h > 0:
+                        change_color_emoji = "🟢" # Без пробела, т.к. будет в скобках
+                    elif change_24h < 0:
+                        change_color_emoji = "🔴" # Без пробела
 
-                top_coins_lines.append(f"  {emoji} <b>{symbol}</b>: {price_format} ({change_24h:+.2f}%) {market_cap_formatted}")
+                top_coins_lines.append(f"  {emoji} <b>{symbol}</b>: {price_format} ({change_color_emoji}{change_24h:+.2f}%) {market_cap_formatted}")
 
                 if extended and symbol not in STABLECOINS_TO_SKIP_ANALYSIS:
                     if abs(change_24h) >= 7:
                         direction = "растёт" if change_24h > 0 else "падает"
                         insights.append(f"— {symbol} ({name}) {direction} более чем на {abs(change_24h):.1f}%. Возможна повышенная волатильность.")
-                    elif 0 < abs(change_24h) < 1 and change_24h != 0: # Исключаем строго нулевое изменение
+                    elif 0 < abs(change_24h) < 1 and change_24h != 0: 
                         insights.append(f"— {symbol} ({name}) почти не изменился ({change_24h:+.2f}%). Возможна консолидация.")
-                    # Можно добавить еще условия, если нужно
 
         if extended and insights:
             top_coins_lines.append("\n→ Краткий анализ по топ криптовалютам (исключая стейблкоины):")
             top_coins_lines.extend(insights)
-        elif extended and not insights: # Если extended=True, но инсайтов нет (например, все активные монеты изменились незначительно)
+        elif extended and not insights: 
             top_coins_lines.append("\n→ Краткий анализ по топ криптовалютам (исключая стейблкоины):")
-            top_coins_lines.append("— Значительных изменений или сигналов для краткого анализа по не-стейблкоинам не выявлено.")
+            # Используем перефразированную строку:
+            top_coins_lines.append("— Среди отслеживаемых криптовалют (кроме стейблкоинов) значимых сигналов для анализа не выявлено.")
 
 
         # Сравнение BTC с 7-дневной средней (эта часть остается)
         try:
             btc_ticker_yf = yf.Ticker("BTC-USD")
-            # Запрашиваем на 1 день больше, чтобы иметь 7 предыдущих дней для среднего
-            btc_hist = btc_ticker_yf.history(period="8d") # 7 дней для SMA + текущий день
+            btc_hist = btc_ticker_yf.history(period="8d") 
 
-            if not btc_hist.empty and len(btc_hist) >= 2: # Нужны хотя бы 2 записи для текущей цены
+            if not btc_hist.empty and len(btc_hist) >= 2: 
                 current_price_btc = btc_hist['Close'].iloc[-1]
 
-                if len(btc_hist) >= 8: # 7 предыдущих дней + текущий день
-                    # Берем срезы: [-8:-1] означает с 8-го элемента с конца до предпоследнего (7 дней)
+                if len(btc_hist) >= 8: 
                     sma7_btc = btc_hist['Close'].iloc[-8:-1].mean()
-                    btc_sma_info_line = f"\n💡 BTC ({format_large_number(current_price_btc).replace('$', '')}) " # Убрал $ для компактности
+                    btc_sma_info_line = f"\n💡 BTC ({format_large_number(current_price_btc).replace('$', '')}) " 
 
                     if current_price_btc > sma7_btc:
                         btc_sma_info_line += f"выше своей 7-дневной средней ({format_large_number(sma7_btc).replace('$', '')})."
@@ -153,26 +164,22 @@ def get_crypto_data(extended=False):
             top_coins_lines.append("💡 Не удалось рассчитать 7-дневную среднюю для BTC.")
 
         final_crypto_block_parts.extend(top_coins_lines)
-        return "\n".join(part for part in final_crypto_block_parts if part) # Собираем все части
+        return "\n".join(part for part in final_crypto_block_parts if part)
 
     except requests.exceptions.HTTPError as http_err:
         error_message = f"Ошибка HTTP при получении данных по криптовалютам CoinGecko: {http_err}"
-        # print(error_message) # Логирование для отладки
         final_crypto_block_parts.append(f"\n❌ {error_message}")
         return "\n".join(part for part in final_crypto_block_parts if part)
     except requests.exceptions.Timeout:
         error_message = "Таймаут при запросе данных по криптовалютам от CoinGecko."
-        # print(error_message) # Логирование для отладки
         final_crypto_block_parts.append(f"\n❌ {error_message}")
         return "\n".join(part for part in final_crypto_block_parts if part)
     except requests.exceptions.RequestException as req_err:
         error_message = f"Сетевая ошибка при получении данных по криптовалютам CoinGecko: {req_err}"
-        # print(error_message) # Логирование для отладки
         final_crypto_block_parts.append(f"\n❌ {error_message}")
         return "\n".join(part for part in final_crypto_block_parts if part)
     except Exception as e:
         error_message = f"Произошла общая ошибка при обработке данных по криптовалютам: {e}"
-        # print(error_message) # Логирование для отладки
         final_crypto_block_parts.append(f"\n❌ {error_message}")
         return "\n".join(part for part in final_crypto_block_parts if part)
 
@@ -180,7 +187,6 @@ def get_crypto_data(extended=False):
 def get_market_data_text():
     """
     Получает данные по фондовым индексам (ETF через Alpha Vantage, "чистые" индексы через yfinance).
-    (Эта функция остается без изменений)
     """
     result_parts = ["📊 Индексы и ETF"]
 
@@ -208,13 +214,19 @@ def get_market_data_text():
                 price = float(price_str)
                 change_percent = float(change_percent_str)
 
-                etf_info_list.append(f"  {name}: ${price:,.2f} ({change_percent:+.2f}%)")
+                etf_change_emoji = "" # Инициализируем пустой строкой
+                if change_percent > 0:
+                    etf_change_emoji = "🟢" # Без пробела, т.к. в скобках
+                elif change_percent < 0:
+                    etf_change_emoji = "🔴" # Без пробела
+                
+                etf_info_list.append(f"  {name}: ${price:,.2f} ({etf_change_emoji}{change_percent:+.2f}%)")
             except Exception as e:
                 etf_info_list.append(f"  {name}: ❌ ошибка ({e})")
         if etf_info_list:
             result_parts.extend(etf_info_list)
             result_parts.append("    └─ *ETF (Exchange Traded Fund) — это фонд, акции которого торгуются на бирже. Цены ETF отражают стоимость базовых активов фонда, а также включают биржевой спрос/предложение и комиссии.*")
-        else: # Если ключ есть, но список пуст (например, из-за ошибок по всем тикерам)
+        else: 
             result_parts.append("  ❌ Не удалось загрузить данные по ETF (AlphaVantage).")
     else:
         result_parts.append("  ℹ️ Alpha Vantage API ключ не настроен, данные по ETF не загружены.")
@@ -231,7 +243,7 @@ def get_market_data_text():
     for name, symbol in index_tickers.items():
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="2d") # Данные за 2 последних торговых дня
+            hist = ticker.history(period="2d") 
             if hist.empty or len(hist) < 2:
                 index_info_list.append(f"  {name}: ❌ нет данных (yfinance)")
                 continue
@@ -243,19 +255,26 @@ def get_market_data_text():
             change_percent = (change / prev_close) * 100
 
             current_price_formatted = f"{current_price:,.2f} pts"
-            index_info_list.append(f"  {name}: {current_price_formatted} ({change_percent:+.2f}%)")
+            
+            index_change_emoji = "" # Инициализируем пустой строкой
+            if change_percent > 0:
+                index_change_emoji = "🟢" # Без пробела, т.к. в скобках
+            elif change_percent < 0:
+                index_change_emoji = "🔴" # Без пробела
+            
+            index_info_list.append(f"  {name}: {current_price_formatted} ({index_change_emoji}{change_percent:+.2f}%)")
         except Exception as e:
             index_info_list.append(f"  {name}: ❌ ошибка ({e})")
 
     if index_info_list:
-        if etf_info_list and ALPHA_KEY: result_parts.append("") # Добавляем пустую строку для отступа, если оба блока есть
+        if etf_info_list and ALPHA_KEY: result_parts.append("") 
         result_parts.extend(index_info_list)
         result_parts.append("    └─ *Значения индексов выражаются в пунктах и являются «чистыми» статистическими величинами, отражающими совокупную стоимость акций компаний, входящих в индекс.*")
-    elif not ALPHA_KEY and not index_info_list : # Если нет ни ETF, ни индексных данных
+    elif not ALPHA_KEY and not index_info_list : 
          result_parts.append("  Не удалось загрузить данные по индексам.")
 
 
-    if len(result_parts) == 1: # Только заголовок "📊 Индексы и ETF"
+    if len(result_parts) == 1: 
          result_parts.append("  Не удалось загрузить данные по индексам и ETF.")
 
     return "\n".join(result_parts)
