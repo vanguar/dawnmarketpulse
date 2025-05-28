@@ -42,11 +42,14 @@ def get_global_crypto_market_data_text():
                 change_emoji = "🟢 " # Пробел после эмодзи для отделения от числа
             elif market_cap_change_24h < 0:
                 change_emoji = "🔴 " # Пробел после эмодзи
+            # Если 0, то change_emoji останется "", и не будет лишнего пробела
+            elif market_cap_change_24h == 0: # явно обрабатываем ноль
+                change_emoji = "⚪ " # или другой нейтральный, или просто ""    
                 
-        change_formatted = f"{change_emoji}{market_cap_change_24h:+.2f}%" if market_cap_change_24h is not None else "N/A"
+        #change_formatted = f"{change_emoji}{market_cap_change_24h:+.2f}%" if market_cap_change_24h is not None else "N/A"
 
         return (f"🌍 Общая капитализация крипторынка: {total_market_cap_formatted}\n"
-                f"   Изменение за 24ч (глобально): {change_formatted}")
+        f"   {change_emoji}Изменение за 24ч (глобально): {market_cap_change_24h:+.2f}%")
     except requests.exceptions.RequestException as e:
         # print(f"Ошибка при запросе глобальных данных CoinGecko: {e}") # Логирование для отладки
         return "🌍 Не удалось получить данные об общей капитализации крипторынка."
@@ -117,8 +120,12 @@ def get_crypto_data(extended=False):
                         change_color_emoji = "🟢" # Без пробела, т.к. будет в скобках
                     elif change_24h < 0:
                         change_color_emoji = "🔴" # Без пробела
+                    elif change_24h == 0: # явно обрабатываем ноль
+                        change_color_emoji = "⚪ " # или просто "" для отсутствия эмодзи
+                # Ваш существующий emoji (📈/📉/📊) был удален из этой строки, 
+                # так как 🟢/🔴 теперь основной индикатор в начале.         
 
-                top_coins_lines.append(f"  {emoji} <b>{symbol}</b>: {price_format} ({change_color_emoji}{change_24h:+.2f}%) {market_cap_formatted}")
+                top_coins_lines.append(f"  {change_color_emoji}<b>{symbol}</b>: {price_format} ({change_24h:+.2f}%) {market_cap_formatted}")
 
                 if extended and symbol not in STABLECOINS_TO_SKIP_ANALYSIS:
                     if abs(change_24h) >= 7:
@@ -219,8 +226,10 @@ def get_market_data_text():
                     etf_change_emoji = "🟢" # Без пробела, т.к. в скобках
                 elif change_percent < 0:
                     etf_change_emoji = "🔴" # Без пробела
+                elif change_percent == 0: # явно обрабатываем ноль
+                    etf_change_emoji = "⚪ " # или просто ""    
                 
-                etf_info_list.append(f"  {name}: ${price:,.2f} ({etf_change_emoji}{change_percent:+.2f}%)")
+                etf_info_list.append(f"  {etf_change_emoji}{name}: ${price:,.2f} ({change_percent:+.2f}%)")
             except Exception as e:
                 etf_info_list.append(f"  {name}: ❌ ошибка ({e})")
         if etf_info_list:
@@ -261,8 +270,10 @@ def get_market_data_text():
                 index_change_emoji = "🟢" # Без пробела, т.к. в скобках
             elif change_percent < 0:
                 index_change_emoji = "🔴" # Без пробела
+            elif change_percent == 0: # явно обрабатываем ноль
+                index_change_emoji = "⚪ " # или просто ""    
             
-            index_info_list.append(f"  {name}: {current_price_formatted} ({index_change_emoji}{change_percent:+.2f}%)")
+            index_info_list.append(f"  {index_change_emoji}{name}: {current_price_formatted} ({change_percent:+.2f}%)")
         except Exception as e:
             index_info_list.append(f"  {name}: ❌ ошибка ({e})")
 
