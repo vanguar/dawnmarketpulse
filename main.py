@@ -31,6 +31,7 @@ openai.api_key = os.getenv("OPENAI_KEY")
 TG_TOKEN = os.getenv("TG_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 MARKETAUX_KEY = os.getenv("MARKETAUX_KEY")
+COINMARKETCAP_KEY = os.getenv("COINMARKETCAP_KEY")
 
 MODEL = "gpt-4o-mini"
 TIMEOUT = 120 
@@ -352,7 +353,7 @@ def send(text_content, add_numeration_if_multiple_parts=False):
 # --- Основная логика скрипта ---
 def main():
     log("🚀 Скрипт запущен.")
-    required_keys = ["OPENAI_KEY", "TG_TOKEN", "CHANNEL_ID", "MARKETAUX_KEY"]
+    required_keys = ["OPENAI_KEY", "TG_TOKEN", "CHANNEL_ID", "MARKETAUX_KEY", "COINMARKETCAP_KEY"]
     keys_ok = True
     for key_name in required_keys:
         if not os.getenv(key_name):
@@ -479,7 +480,7 @@ def main():
                 if str_component:
                     valid_components.append(str_component)
 
-        full_report_body_string = "\n".join(valid_components)
+        full_report_body_string = "\n\n".join(valid_components)
         data_update_signature = f"---\n📅 Данные на ~ {current_date_str}, обновлены около {update_time_str}."
         final_telegram_message = f"{full_report_body_string}\n\n{data_update_signature}"
         
