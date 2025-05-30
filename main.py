@@ -24,6 +24,7 @@ from metrics_reader import get_derivatives_block
 from whale_alert_reader import get_whale_activity_summary
 from fng_reader import get_fear_and_greed_index_text
 from collections import Counter
+from custom_logger import log
 
 
 # --- Конфигурация ---

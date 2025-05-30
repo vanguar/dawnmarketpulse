@@ -3,6 +3,7 @@ import os
 import requests
 from datetime import date
 import yfinance as yf
+from custom_logger import log
 
 ALPHA_KEY = os.getenv("ALPHA_KEY") # Для get_market_data_text()
 
@@ -73,9 +74,9 @@ def _fetch_crypto_data_cmc(limit=10):
         market_cap_global_change_24h_cmc = quote_usd_global.get("total_market_cap_yesterday_percentage_change")
 
         if total_market_cap_usd is None:
-            print("WARNING: CMC Global Metrics - 'total_market_cap' is None.") # ЗАМЕНИТЬ НА log()
+            log(f"WARNING: CMC Global Metrics - 'total_market_cap' is None. Содержимое quote_usd_global: {quote_usd_global}")
         if market_cap_global_change_24h_cmc is None:
-            print("WARNING: CMC Global Metrics - 'total_market_cap_yesterday_percentage_change' is None.") # ЗАМЕНИТЬ НА log()
+            log(f"WARNING: CMC Global Metrics - 'total_market_cap_yesterday_percentage_change' is None. Содержимое quote_usd_global: {quote_usd_global}")
 
         # 2. Топ N монет
         listings_url = f"{COINMARKETCAP_API_BASE_URL}/cryptocurrency/listings/latest"
