@@ -323,6 +323,15 @@ def send(text_content, add_numeration_if_multiple_parts=False):
         if add_numeration_if_multiple_parts and total_parts_count > 1:
             numeration_prefix_str = f"Часть {idx}/{total_parts_count}:\n\n"
             final_text_for_telegram = numeration_prefix_str + single_part_content
+
+            if idx == total_parts_count:
+                donate_block = """
+        ☕ <b>Поддержать проект:</b>
+        👉 <a href="https://tronscan.org/#/address/TZ6rTYbF5Go94Q4f9uZwcVZ4g3oAnzwDHN">Донат в USDT (TRC-20)</a>
+        👉 <a href="https://tonviewer.com/UQB0W1KEAR7RFQ03AIA872jw-2G2ntydiXlyhfTN8rAb2KN5">Донат в TON</a>
+        ✉️ <a href="https://t.me/ryanair_deals_bot">Связаться с автором</a>
+        """
+                final_text_for_telegram += "\n\n" + donate_block
             log_part_prefix_display = f"Часть {idx}/{total_parts_count} " 
             final_text_bytes_with_prefix = len(final_text_for_telegram.encode('utf-8'))
             if final_text_bytes_with_prefix > 4096: 
