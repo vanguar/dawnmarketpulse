@@ -7,6 +7,18 @@
 import os, time, html, re, requests
 from datetime import datetime, timedelta
 from custom_logger import log     # уже есть в проекте
+from googletrans import Translator
+translator = Translator()
+
+def _ru(text: str) -> str:
+    """Переводит цитату на русский, если исходник не ru/uk."""
+    try:
+        tr = translator.translate(text, dest="ru")
+        return tr.text
+    except Exception as e:
+        log(f"Translate error: {e}")
+        return text
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 1. Данные и ключи
@@ -201,8 +213,12 @@ def _collect_for_aliases(aliases: list[str]) -> list[str]:
         for fn in SRC_FUNCS:
             quotes.extend(fn(alias))
             if len(quotes) >= MAX_QUOTES_PER_PERSON:
-                return quotes[:MAX_QUOTES_PER_PERSON]
-    return quotes[:MAX_QUOTES_PER_PERSON]
+                break
+        if len(quotes) >= MAX_QUOTES_PER_PERSON:
+            break
+    # Переводим и обрезаем до нужного количества
+    return [_ru(q) for q in quotes[:MAX_QUOTES_PER_PERSON]]
+
 
 def _build_block(category: str) -> str:
     bullets = []
