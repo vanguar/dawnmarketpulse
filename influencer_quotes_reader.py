@@ -1,40 +1,92 @@
 # influencer_quotes_reader.py
-# v1.1 – 09-Jun-2025
+# v2.0 – 10-Jun-2025
 #
-# Забираем свежие высказывания инфлюенсеров из Reddit, NewsAPI, YouTube и Mastodon
-# без платного Twitter API.  Всё «read-only», без Selenium.
-# Изменение v1.1: Добавлен вызов функции перевода _ru() для цитат.
+# Забираем свежие высказывания инфлюенсеров и используем GPT для качественного перевода.
+# Изменение v2.0: Полный отказ от googletrans в пользу пакетного перевода через OpenAI GPT.
 
-import os, time, html, re, requests
+import os
+import time
+import html
+import re
+import requests
+import openai
 from datetime import datetime, timedelta
-from custom_logger import log     # уже есть в проекте
-from googletrans import Translator
-translator = Translator()
+from custom_logger import log
 
-def _ru(text: str) -> str:
-    """Переводит цитату на русский, если исходник не ru/uk."""
+# --- Конфигурация GPT ---
+# Используем ту же модель, что и в main.py для консистентности
+GPT_MODEL_FOR_TRANSLATION = "gpt-4o-mini"
+
+
+def _translate_quotes_with_gpt(quotes: list[str]) -> list[str]:
+    """
+    Отправляет список цитат в GPT для качественного "органического" перевода и адаптации.
+    Возвращает список переведенных цитат.
+    """
+    if not quotes:
+        return []
+
+    # Создаем нумерованный список цитат для промпта
+    numbered_quotes = "\n".join([f'{i+1}. "{quote}"' for i, quote in enumerate(quotes)])
+
+    prompt = f"""
+Ты — профессиональный редактор и переводчик для популярного финансового Telegram-канала. Тебе предоставлен список сырых цитат и высказываний на английском языке.
+Твоя задача — выполнить качественный, "органический" перевод-адаптацию этих цитат на русский язык.
+
+Ключевые требования:
+1.  **Естественность и плавность:** Перевод должен звучать как живая, естественная русская речь, а не как дословный машинный перевод. Смело адаптируй фразы и обороты, сохраняя исходный смысл и тон.
+2.  **Контекст:** Учитывай, что это мнения лидеров в сфере финансов, технологий и криптовалют. Терминологию используй правильно.
+3.  **Точность:** Не теряй ключевые детали, цифры и основной посыл оригинального высказывания.
+4.  **Формат ответа:** Верни ТОЛЬКО переведенные цитаты в виде нумерованного списка. Порядок должен строго соответствовать оригиналу. Не добавляй ничего лишнего: ни заголовков, ни комментариев, ни своих мыслей.
+
+Оригинальные цитаты для перевода:
+---
+{numbered_quotes}
+---
+
+Твой адаптированный перевод (строго нумерованный список):
+"""
+
     try:
-        # Проверяем, нужно ли вообще переводить
-        detected = translator.detect(text)
-        if detected.lang.lower() in ['ru', 'uk']:
-            return text
-        tr = translator.translate(text, dest="ru")
-        return tr.text
-    except Exception as e:
-        log(f"Translate error: {e}")
-        return text
+        # Проверяем, установлен ли ключ OpenAI, который настраивается в main.py
+        if not openai.api_key:
+            log("CRITICAL: OpenAI API key is not set. Cannot perform translation.")
+            return quotes # Возвращаем сырые цитаты, если ключ не найден
 
+        log(f"INFO: Отправка {len(quotes)} цитат в GPT для перевода...")
+        response = openai.ChatCompletion.create(
+            model=GPT_MODEL_FOR_TRANSLATION,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,  # Немного креативности для лучшего стиля
+            max_tokens=2048   # Запас токенов для перевода
+        )
+        translated_text = response.choices[0].message.content.strip()
+
+        # Парсим нумерованный список из ответа GPT
+        translated_quotes_list = re.findall(r"^\d+\.\s*\"?(.*?)\"?$", translated_text, re.MULTILINE)
+
+        if len(translated_quotes_list) == len(quotes):
+            log("INFO: GPT успешно перевел и адаптировал все цитаты.")
+            return translated_quotes_list
+        else:
+            log(f"ERROR: GPT translation parsing failed. Expected {len(quotes)} quotes, got {len(translated_quotes_list)}. Returning raw quotes.")
+            return quotes  # Возврат к сырым данным при ошибке парсинга
+
+    except Exception as e:
+        log(f"CRITICAL: OpenAI API call failed during translation: {e}")
+        return quotes  # Возврат к сырым данным при ошибке API
 
 # ────────────────────────────────────────────────────────────────────────────────
+# Остальная часть файла без изменений в логике сбора, только интеграция с новой функцией перевода
+# ────────────────────────────────────────────────────────────────────────────────
+
+
 # 1. Данные и ключи
-
-NEWSAPI_KEY     = os.getenv("NEWSAPI_KEY")     # https://newsapi.org
-YOUTUBE_KEY     = os.getenv("YOUTUBE_KEY")     # console.cloud.google.com
-MASTODON_TOKEN  = os.getenv("MASTODON_TOKEN")  # любой публичный инстанс
+NEWSAPI_KEY     = os.getenv("NEWSAPI_KEY")
+YOUTUBE_KEY     = os.getenv("YOUTUBE_KEY")
+MASTODON_TOKEN  = os.getenv("MASTODON_TOKEN")
 MASTODON_HOST   = os.getenv("MASTODON_HOST", "mastodon.social")
-
 USER_AGENT = "MomentumPulse/1.0 (+https://t.me/MomentumPulse)"
-
 INFLUENCERS = [
     # category: crypto | stock
     {"name": "Elon Musk",           "aliases": ["Elon Musk", "Musk"],           "category": "stock"},
@@ -51,15 +103,11 @@ INFLUENCERS = [
     {"name": "Anthony Pompliano",   "aliases": ["Anthony Pompliano"],           "category": "crypto"},
     {"name": "Balaji Srinivasan",   "aliases": ["Balaji Srinivasan", "Balaji"], "category": "crypto"},
 ]
-
 LOOKBACK_HOURS = 24
 MAX_QUOTES_PER_PERSON = 1
 TIMEOUT = 12
 
-
-# ────────────────────────────────────────────────────────────────────────────────
 # 2. Хелперы
-
 def _clean_snippet(text: str, max_chars: int = 220) -> str:
     text = html.unescape(text).strip().replace("\n", " ")
     text = re.sub(r"\s{2,}", " ", text)
@@ -73,20 +121,9 @@ def _clean_snippet(text: str, max_chars: int = 220) -> str:
     if not snippet:
         snippet = text[: max_chars].rsplit(" ", 1)[0] + "…"
     return snippet
-
 _cut = _clean_snippet
 
-def _to_ts(dt: datetime) -> int:
-    return int(dt.replace(tzinfo=None).timestamp())
-
-def _since_param(hours_back: int = LOOKBACK_HOURS):
-    t = datetime.utcnow() - timedelta(hours=hours_back)
-    return _to_ts(t)
-
-
-# ────────────────────────────────────────────────────────────────────────────────
-# 3. Источники данных (Reddit, NewsAPI, YouTube, Mastodon) - без изменений
-
+# 3. Функции сбора данных (без изменений)
 def _fetch_reddit(alias: str) -> list[str]:
     url = (
         f"https://www.reddit.com/search.json?q=\"{requests.utils.quote(alias)}\""
@@ -97,7 +134,7 @@ def _fetch_reddit(alias: str) -> list[str]:
         r.raise_for_status()
         posts = r.json().get("data", {}).get("children", [])
         out = []
-        ts_limit = _since_param()
+        ts_limit = int((datetime.utcnow() - timedelta(hours=LOOKBACK_HOURS)).timestamp())
         for p in posts:
             data = p.get("data", {})
             if data.get("created_utc", 0) < ts_limit:
@@ -115,10 +152,7 @@ def _fetch_reddit(alias: str) -> list[str]:
 def _fetch_newsapi(alias: str) -> list[str]:
     if not NEWSAPI_KEY: return []
     url = "https://newsapi.org/v2/everything"
-    params = {
-        "qInTitle": alias, "sortBy": "publishedAt", "language": "en",
-        "pageSize": 5, "apiKey": NEWSAPI_KEY,
-    }
+    params = {"qInTitle": alias, "sortBy": "publishedAt", "language": "en", "pageSize": 5, "apiKey": NEWSAPI_KEY}
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
         r.raise_for_status()
@@ -141,21 +175,18 @@ def _fetch_newsapi(alias: str) -> list[str]:
 def _fetch_youtube(alias: str) -> list[str]:
     if not YOUTUBE_KEY: return []
     url = "https://www.googleapis.com/youtube/v3/search"
-    params = {
-        "part": "snippet", "q": alias, "maxResults": 5,
-        "order": "date", "type": "video", "key": YOUTUBE_KEY,
-    }
+    params = {"part": "snippet", "q": alias, "maxResults": 5, "order": "date", "type": "video", "key": YOUTUBE_KEY}
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
         r.raise_for_status()
         items = r.json().get("items", [])
         out = []
-        ts_limit = _since_param()
+        ts_limit = (datetime.utcnow() - timedelta(hours=LOOKBACK_HOURS))
         for it in items:
             sn = it.get("snippet", {})
             published = sn.get("publishedAt", "")[:19]
             try:
-                if datetime.fromisoformat(published.replace("Z", "")) < datetime.utcfromtimestamp(ts_limit):
+                if datetime.fromisoformat(published.replace("Z", "")) < ts_limit:
                     continue
             except: pass
             title = sn.get("title", "")
@@ -177,7 +208,7 @@ def _fetch_mastodon(alias: str) -> list[str]:
         r.raise_for_status()
         statuses = r.json().get("statuses", [])
         out = []
-        ts_limit = _since_param()
+        ts_limit = (datetime.utcnow() - timedelta(hours=LOOKBACK_HOURS)).timestamp()
         for st in statuses:
             created = datetime.fromisoformat(st["created_at"][:-1])
             if created.timestamp() < ts_limit: continue
@@ -189,12 +220,8 @@ def _fetch_mastodon(alias: str) -> list[str]:
         log(f"Mastodon error ({alias}): {e}")
         return []
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# 4. Агрегация и перевод
-
+# 4. Агрегация и пакетный перевод
 SRC_FUNCS = [_fetch_reddit, _fetch_newsapi, _fetch_youtube, _fetch_mastodon]
-
 def _collect_for_aliases(aliases: list[str]) -> list[str]:
     quotes = []
     for alias in aliases:
@@ -205,18 +232,38 @@ def _collect_for_aliases(aliases: list[str]) -> list[str]:
     return [_clean_snippet(q) for q in quotes[:MAX_QUOTES_PER_PERSON]]
 
 def _build_block(category: str) -> str:
-    bullets = []
+    influencers_with_quotes = []
+    raw_quotes_to_translate = []
+
+    # Шаг 1: Собираем все "сырые" цитаты в один список
     for inf in INFLUENCERS:
         if inf["category"] != category:
             continue
         q = _collect_for_aliases(inf["aliases"])
         if q:
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-            # Добавляем вызов функции перевода _ru() для полученной цитаты q[0]
-            translated_quote = _ru(q[0])
-            bullets.append(f"— <b>{inf['name']}</b>: {translated_quote}")
+            influencers_with_quotes.append(inf)
+            raw_quotes_to_translate.append(q[0])
+
+    if not raw_quotes_to_translate:
+        return ""
+
+    # Шаг 2: Переводим все цитаты одним пакетным запросом к GPT
+    translated_quotes = _translate_quotes_with_gpt(raw_quotes_to_translate)
+
+    # Шаг 3: Собираем итоговый блок с переведенными цитатами
+    bullets = []
+    if len(translated_quotes) == len(influencers_with_quotes):
+        for inf, translated_q in zip(influencers_with_quotes, translated_quotes):
+            bullets.append(f"— <b>{inf['name']}</b>: {translated_q}")
+    else:
+        # План Б: если что-то пошло не так, выводим что есть (например, сырые цитаты)
+        log("ERROR: Mismatch in translated quotes count. Falling back to raw quotes.")
+        for inf, raw_q in zip(influencers_with_quotes, raw_quotes_to_translate):
+            bullets.append(f"— <b>{inf['name']}</b>: {raw_q} (ошибка перевода)")
+
     if not bullets:
         return ""
+
     title = "🗣️ Мнения крипто-лидеров" if category == "crypto" \
             else "🗣️ Выдержки от людей, влияющих на фондовый рынок"
     return "\n".join([title] + bullets)
