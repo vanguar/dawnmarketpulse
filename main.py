@@ -14,6 +14,7 @@ from datetime import datetime, timezone, date, timedelta
 from time import sleep
 import traceback
 import re
+from influencer_quotes_reader import get_crypto_quotes_block, get_stock_quotes_block
 
 # Модули проекта
 from market_reader import get_market_data_text, get_crypto_data
@@ -23,6 +24,7 @@ from analyzer import keyword_alert, store_and_compare
 from metrics_reader import get_derivatives_block
 from whale_alert_reader import get_whale_activity_summary
 from fng_reader import get_fear_and_greed_index_text
+from influencer_quotes_reader import get_crypto_quotes_block, get_stock_quotes_block
 from collections import Counter
 from custom_logger import log
 
@@ -403,6 +405,9 @@ def main():
 
         log("🔄 Сбор данных по фондовому рынку...")
         market_data_block = get_market_data_text()
+        log("🔄 Сбор высказываний инфлюенсеров…")
+        crypto_quotes_block = get_crypto_quotes_block()
+        stock_quotes_block  = get_stock_quotes_block()
 
         # 2. Получение пула новостей и анализ упоминаний влиятельных лиц
         log("🔄 Загрузка пула новостей для поиска упоминаний влиятельных лиц...")
@@ -465,14 +470,22 @@ def main():
         list_of_report_components = [
             run_log_msg,
             report_title_msg,
+
+            # ── КРИПТО ─────────────────────────────────
             crypto_price_block,
             fear_and_greed_block,
-            derivatives_block, 
+            derivatives_block,
             whale_activity_block,
-            "______________________________", 
-            influencer_final_analysis_block if influencer_final_analysis_block else None, # Добавляем если не пустой
-            "______________________________", 
-            market_data_block, 
+            crypto_quotes_block,      # ← новый блок
+            "______________________________",
+
+            # ── ВЛИЯТЕЛИ В НОВОСТЯХ (GPT) ─────────────
+            influencer_final_analysis_block if influencer_final_analysis_block else None,
+            "______________________________",
+
+            # ── ФОНДА ────────────────────────────────
+            market_data_block,
+            stock_quotes_block,       # ← второй новый блок 
             f"🤖 Анализ и выводы от эксперта GPT на {current_date_str}:",
             main_analytical_text_from_gpt, # Здесь будет уже дедуплицированный текст
             keyword_alert(main_analytical_text_from_gpt), 

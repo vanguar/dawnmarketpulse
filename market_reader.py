@@ -302,13 +302,12 @@ def get_crypto_data(extended=False):
                     elif 0 < abs(change_24h_coin_float) < 1 and change_24h_coin_float != 0: 
                         insights.append(f"— {symbol} ({name}) почти не изменился ({change_24h_coin_float:+.2f}%).")
             
-        if extended:
+        if extended and insights:
             top_coins_lines.append("\n→ Краткий анализ по топ криптовалютам (исключая стейблкоины):")
+            top_coins_lines.extend(insights)
             if insights:
                 top_coins_lines.extend(insights)
-            else: 
-                top_coins_lines.append("— Среди отслеживаемых криптовалют (кроме стейблкоинов) значимых сигналов для анализа не выявлено.")
-
+            
         try: # Блок для SMA BTC
             btc_ticker_yf = yf.Ticker("BTC-USD")
             btc_hist = btc_ticker_yf.history(period="8d")
