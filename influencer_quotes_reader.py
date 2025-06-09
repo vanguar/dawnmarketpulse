@@ -55,9 +55,31 @@ TIMEOUT = 12
 # ────────────────────────────────────────────────────────────────────────────────
 # 2. Хелперы
 
-def _cut(text: str, n: int = 140) -> str:
-    text = html.unescape(text.strip().replace('\n', ' '))
-    return (text[:n] + "…") if len(text) > n else text
+def _clean_snippet(text: str, max_chars: int = 220) -> str:
+    """
+    Оставляем первое(-ые) предложение целиком, чтобы умещалось в max_chars.
+    Если первое предложение длиннющее — аккуратно режем по последнему пробелу.
+    """
+    text = html.unescape(text).strip().replace("\n", " ")
+    # убираем лишние пробелы
+    text = re.sub(r"\s{2,}", " ", text)
+
+    # разбиваем по .!?  (но не по   …)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    snippet = ""
+    for sent in sentences:
+        if len(snippet) + len(sent) <= max_chars:
+            snippet = f"{snippet} {sent}".strip()
+        else:
+            break
+
+    if not snippet:                   # первое предложение само по себе здоровенное
+        snippet = text[: max_chars].rsplit(" ", 1)[0] + "…"
+    return snippet
+
+# ── alias for old calls ────────────────────────────────────────────────────────
+_cut = _clean_snippet
+
 
 def _to_ts(dt: datetime) -> int:
     return int(dt.replace(tzinfo=None).timestamp())
@@ -216,8 +238,10 @@ def _collect_for_aliases(aliases: list[str]) -> list[str]:
                 break
         if len(quotes) >= MAX_QUOTES_PER_PERSON:
             break
-    # Переводим и обрезаем до нужного количества
-    return [_ru(q) for q in quotes[:MAX_QUOTES_PER_PERSON]]
+
+    #  аккуратный сниппет без перевода
+    return [_clean_snippet(q) for q in quotes[:MAX_QUOTES_PER_PERSON]]
+
 
 
 def _build_block(category: str) -> str:
