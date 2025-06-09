@@ -1,8 +1,9 @@
 # influencer_quotes_reader.py
-# v1.0 – 09-Jun-2025
+# v1.1 – 09-Jun-2025
 #
 # Забираем свежие высказывания инфлюенсеров из Reddit, NewsAPI, YouTube и Mastodon
 # без платного Twitter API.  Всё «read-only», без Selenium.
+# Изменение v1.1: Добавлен вызов функции перевода _ru() для цитат.
 
 import os, time, html, re, requests
 from datetime import datetime, timedelta
@@ -13,6 +14,10 @@ translator = Translator()
 def _ru(text: str) -> str:
     """Переводит цитату на русский, если исходник не ru/uk."""
     try:
+        # Проверяем, нужно ли вообще переводить
+        detected = translator.detect(text)
+        if detected.lang.lower() in ['ru', 'uk']:
+            return text
         tr = translator.translate(text, dest="ru")
         return tr.text
     except Exception as e:
@@ -47,8 +52,8 @@ INFLUENCERS = [
     {"name": "Balaji Srinivasan",   "aliases": ["Balaji Srinivasan", "Balaji"], "category": "crypto"},
 ]
 
-LOOKBACK_HOURS = 24          # берём только за последние сутки
-MAX_QUOTES_PER_PERSON = 1    # лишнее не нужно – отчёт и так длинный
+LOOKBACK_HOURS = 24
+MAX_QUOTES_PER_PERSON = 1
 TIMEOUT = 12
 
 
@@ -56,15 +61,8 @@ TIMEOUT = 12
 # 2. Хелперы
 
 def _clean_snippet(text: str, max_chars: int = 220) -> str:
-    """
-    Оставляем первое(-ые) предложение целиком, чтобы умещалось в max_chars.
-    Если первое предложение длиннющее — аккуратно режем по последнему пробелу.
-    """
     text = html.unescape(text).strip().replace("\n", " ")
-    # убираем лишние пробелы
     text = re.sub(r"\s{2,}", " ", text)
-
-    # разбиваем по .!?  (но не по   …)
     sentences = re.split(r"(?<=[.!?])\s+", text)
     snippet = ""
     for sent in sentences:
@@ -72,14 +70,11 @@ def _clean_snippet(text: str, max_chars: int = 220) -> str:
             snippet = f"{snippet} {sent}".strip()
         else:
             break
-
-    if not snippet:                   # первое предложение само по себе здоровенное
+    if not snippet:
         snippet = text[: max_chars].rsplit(" ", 1)[0] + "…"
     return snippet
 
-# ── alias for old calls ────────────────────────────────────────────────────────
 _cut = _clean_snippet
-
 
 def _to_ts(dt: datetime) -> int:
     return int(dt.replace(tzinfo=None).timestamp())
@@ -90,7 +85,7 @@ def _since_param(hours_back: int = LOOKBACK_HOURS):
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# 3.   Reddit  (без auth – достаточно для поиска)
+# 3. Источники данных (Reddit, NewsAPI, YouTube, Mastodon) - без изменений
 
 def _fetch_reddit(alias: str) -> list[str]:
     url = (
@@ -117,20 +112,12 @@ def _fetch_reddit(alias: str) -> list[str]:
         log(f"Reddit error ({alias}): {e}")
         return []
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# 4.   NewsAPI
-
 def _fetch_newsapi(alias: str) -> list[str]:
-    if not NEWSAPI_KEY:
-        return []
+    if not NEWSAPI_KEY: return []
     url = "https://newsapi.org/v2/everything"
     params = {
-        "qInTitle": alias,
-        "sortBy": "publishedAt",
-        "language": "en",
-        "pageSize": 5,
-        "apiKey": NEWSAPI_KEY,
+        "qInTitle": alias, "sortBy": "publishedAt", "language": "en",
+        "pageSize": 5, "apiKey": NEWSAPI_KEY,
     }
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
@@ -139,35 +126,24 @@ def _fetch_newsapi(alias: str) -> list[str]:
         out = []
         ts_limit = datetime.utcnow() - timedelta(hours=LOOKBACK_HOURS)
         for n in news:
-            published = n.get("publishedAt", "")[:19]  # 2025-06-09T08:05:00Z
+            published = n.get("publishedAt", "")[:19]
             try:
                 if datetime.fromisoformat(published.replace("Z", "")) < ts_limit:
                     continue
-            except:  # парсеру насрать
-                pass
+            except: pass
             out.append(_cut(n.get("title", "")))
-            if len(out) >= MAX_QUOTES_PER_PERSON:
-                break
+            if len(out) >= MAX_QUOTES_PER_PERSON: break
         return out
     except Exception as e:
         log(f"NewsAPI error ({alias}): {e}")
         return []
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# 5.   YouTube (title + description новых видео)
-
 def _fetch_youtube(alias: str) -> list[str]:
-    if not YOUTUBE_KEY:
-        return []
+    if not YOUTUBE_KEY: return []
     url = "https://www.googleapis.com/youtube/v3/search"
     params = {
-        "part": "snippet",
-        "q": alias,
-        "maxResults": 5,
-        "order": "date",
-        "type": "video",
-        "key": YOUTUBE_KEY,
+        "part": "snippet", "q": alias, "maxResults": 5,
+        "order": "date", "type": "video", "key": YOUTUBE_KEY,
     }
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
@@ -181,25 +157,18 @@ def _fetch_youtube(alias: str) -> list[str]:
             try:
                 if datetime.fromisoformat(published.replace("Z", "")) < datetime.utcfromtimestamp(ts_limit):
                     continue
-            except:
-                pass
+            except: pass
             title = sn.get("title", "")
             if title:
                 out.append(_cut(title))
-            if len(out) >= MAX_QUOTES_PER_PERSON:
-                break
+            if len(out) >= MAX_QUOTES_PER_PERSON: break
         return out
     except Exception as e:
         log(f"YouTube error ({alias}): {e}")
         return []
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# 6.   Mastodon  (поиск по публичному /api/v2/search)
-
 def _fetch_mastodon(alias: str) -> list[str]:
-    if not MASTODON_TOKEN:
-        return []
+    if not MASTODON_TOKEN: return []
     url = f"https://{MASTODON_HOST}/api/v2/search"
     params = {"q": alias, "limit": 5, "resolve": "true"}
     headers = {"Authorization": f"Bearer {MASTODON_TOKEN}", "User-Agent": USER_AGENT}
@@ -211,13 +180,10 @@ def _fetch_mastodon(alias: str) -> list[str]:
         ts_limit = _since_param()
         for st in statuses:
             created = datetime.fromisoformat(st["created_at"][:-1])
-            if created.timestamp() < ts_limit:
-                continue
-            # убираем html-теги
+            if created.timestamp() < ts_limit: continue
             text = re.sub("<.*?>", "", st["content"])
             out.append(_cut(text))
-            if len(out) >= MAX_QUOTES_PER_PERSON:
-                break
+            if len(out) >= MAX_QUOTES_PER_PERSON: break
         return out
     except Exception as e:
         log(f"Mastodon error ({alias}): {e}")
@@ -225,7 +191,7 @@ def _fetch_mastodon(alias: str) -> list[str]:
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# 7.   Агрегация
+# 4. Агрегация и перевод
 
 SRC_FUNCS = [_fetch_reddit, _fetch_newsapi, _fetch_youtube, _fetch_mastodon]
 
@@ -234,15 +200,9 @@ def _collect_for_aliases(aliases: list[str]) -> list[str]:
     for alias in aliases:
         for fn in SRC_FUNCS:
             quotes.extend(fn(alias))
-            if len(quotes) >= MAX_QUOTES_PER_PERSON:
-                break
-        if len(quotes) >= MAX_QUOTES_PER_PERSON:
-            break
-
-    #  аккуратный сниппет без перевода
+            if len(quotes) >= MAX_QUOTES_PER_PERSON: break
+        if len(quotes) >= MAX_QUOTES_PER_PERSON: break
     return [_clean_snippet(q) for q in quotes[:MAX_QUOTES_PER_PERSON]]
-
-
 
 def _build_block(category: str) -> str:
     bullets = []
@@ -251,14 +211,17 @@ def _build_block(category: str) -> str:
             continue
         q = _collect_for_aliases(inf["aliases"])
         if q:
-            bullets.append(f"— <b>{inf['name']}</b>: {q[0]}")
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+            # Добавляем вызов функции перевода _ru() для полученной цитаты q[0]
+            translated_quote = _ru(q[0])
+            bullets.append(f"— <b>{inf['name']}</b>: {translated_quote}")
     if not bullets:
         return ""
     title = "🗣️ Мнения крипто-лидеров" if category == "crypto" \
             else "🗣️ Выдержки от людей, влияющих на фондовый рынок"
     return "\n".join([title] + bullets)
 
-# Экспортируемые функции  ───────────────────────────────────────────────────────
+# Экспортируемые функции
 def get_crypto_quotes_block() -> str:
     return _build_block("crypto")
 
