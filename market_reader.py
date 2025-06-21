@@ -4,6 +4,8 @@ import requests
 from datetime import date
 import yfinance as yf
 from custom_logger import log
+import ta
+from typing import Optional
 
 ALPHA_KEY = os.getenv("ALPHA_KEY") # Для get_market_data_text()
 
@@ -176,7 +178,7 @@ def _fetch_crypto_data_coingecko(limit=10):
     except requests.exceptions.RequestException as req_err:
         return None, None, None, f"Сетевая ошибка CoinGecko: {req_err}"
     except Exception as e: # Ловим более общие исключения
-        print(f"CRITICAL: Unexpected error in _fetch_crypto_data_coingecko: {e}") # ЗАМЕНИТЬ НА log()
+        log(f"CRITICAL: Unexpected error in _fetch_crypto_data_coingecko: {e}")
         # import traceback # Раскомментировать для детального трейсбека в логах
         # print(traceback.format_exc()) # ЗАМЕНИТЬ НА log()
         return None, None, None, f"Общая непредвиденная ошибка CoinGecko: {type(e).__name__}"
@@ -210,44 +212,57 @@ def get_global_crypto_market_data_text_formatted(total_market_cap, market_cap_ch
 
 def get_crypto_data(extended: bool = False):
     """
-    Получает данные по топ-10 криптовалютам: сначала CoinGecko, при неудаче CoinMarketCap.
+    Получает данные по топ-10 криптовалютам и добавляет блок технических сигналов для BTC.
+    Версия с точечными улучшениями на основе вашего кода.
     """
+    # --- Защита от некорректных значений в .env ---
+    try:
+        VOLUME_SPIKE_THRESHOLD = float(os.getenv("VOLUME_SPIKE_THRESHOLD", "1.7"))
+    except ValueError:
+        log("WARNING: Invalid VOLUME_SPIKE_THRESHOLD in .env, fallback to 1.7")
+        VOLUME_SPIKE_THRESHOLD = 1.7
+    try:
+        SMA_DEVIATION_THRESHOLD = float(os.getenv("SMA_DEVIATION_THRESHOLD", "3.0"))
+    except ValueError:
+        log("WARNING: Invalid SMA_DEVIATION_THRESHOLD in .env, fallback to 3.0")
+        SMA_DEVIATION_THRESHOLD = 3.0
+
+    # --- Блок получения данных от API (CoinGecko/CMC) ---
     final_crypto_block_parts = []
     coins_data_list = None
     total_market_cap_val = None
     market_cap_change_24h_val = None
     source_name_used = ""
 
-    print("INFO: Attempting to fetch crypto data from CoinGecko...")  # ЗАМЕНИТЬ НА log()
+    log("INFO: Attempting to fetch crypto data from CoinGecko...")
     cg_coins, cg_total_cap, cg_cap_change, error_cg = _fetch_crypto_data_coingecko()
 
     if error_cg:
-        print(f"WARNING: CoinGecko Error: {error_cg}")  # ЗАМЕНИТЬ НА log()
+        log(f"WARNING: CoinGecko Error: {error_cg}")
         if COINMARKETCAP_API_KEY:
-            print("INFO: CoinGecko failed. Attempting CoinMarketCap...")  # ЗАМЕНИТЬ НА log()
+            log("INFO: CoinGecko failed. Attempting CoinMarketCap...")
             cmc_coins, cmc_total_cap, cmc_cap_change, error_cmc = _fetch_crypto_data_cmc()
             if error_cmc:
-                print(f"ERROR: CoinMarketCap Error: {error_cmc}")  # ЗАМЕНИТЬ НА log()
+                log(f"ERROR: CoinMarketCap Error: {error_cmc}")
                 final_crypto_block_parts.append(
                     "❌ Не удалось получить данные по криптовалютам (оба источника недоступны)."
                 )
-            else:  # CMC успешен
+            else:
                 coins_data_list = cmc_coins
                 total_market_cap_val = cmc_total_cap
                 market_cap_change_24h_val = cmc_cap_change
                 source_name_used = "CoinMarketCap"
-                print("INFO: Successfully fetched crypto data from CoinMarketCap.")  # ЗАМЕНИТЬ НА log()
+                log("INFO: Successfully fetched crypto data from CoinMarketCap.")
         else:
-            print("WARNING: CoinGecko failed. CMC key not configured.")  # ЗАМЕНИТЬ НА log()
+            log("WARNING: CoinGecko failed. CMC key not configured.")
             final_crypto_block_parts.append("❌ Ошибка CoinGecko. Резервный источник (CoinMarketCap) не настроен.")
-    else:  # CG успешен
+    else:
         coins_data_list = cg_coins
         total_market_cap_val = cg_total_cap
         market_cap_change_24h_val = cg_cap_change
         source_name_used = "CoinGecko"
-        print("INFO: Successfully fetched crypto data from CoinGecko.")  # ЗАМЕНИТЬ НА log()
+        log("INFO: Successfully fetched crypto data from CoinGecko.")
 
-    # ───────────────────── глобальная капитализация ─────────────────────
     if total_market_cap_val is not None and market_cap_change_24h_val is not None:
         global_market_text = get_global_crypto_market_data_text_formatted(
             total_market_cap_val, market_cap_change_24h_val, source_name_used
@@ -257,12 +272,10 @@ def get_crypto_data(extended: bool = False):
         err_src_name = source_name_used or "источников"
         final_crypto_block_parts.append(f"🌍 Данные об общей капитализации от {err_src_name} временно недоступны.")
 
-    # ───────────────────── топ-10 монет ─────────────────────
     if coins_data_list is not None:
         today_date_str = date.today().strftime("%d.%m.%Y")
         source_info_coins = f" (источник: {source_name_used})" if source_name_used else ""
         top_coins_lines = [f"\n₿ Крипта на {today_date_str}{source_info_coins} (Топ-10 по капитализации)"]
-
         insights_set: set[str] = set()
 
         if not coins_data_list:
@@ -279,7 +292,6 @@ def get_crypto_data(extended: bool = False):
                     top_coins_lines.append(f"  {symbol}: ❌ неполные данные ({name}) от {source_name_used}")
                     continue
 
-                # формат цены
                 price_formatted = "$0.0000"
                 try:
                     price_f = float(price_val)
@@ -291,7 +303,6 @@ def get_crypto_data(extended: bool = False):
                     f"(кап: {format_large_number(market_cap_coin)})" if market_cap_coin is not None else ""
                 )
 
-                # изменение за 24ч
                 coin_change_emoji = ""
                 change_24h_coin_float = 0.0
                 change_24h_coin_formatted = "N/A"
@@ -312,7 +323,6 @@ def get_crypto_data(extended: bool = False):
                     f"({change_24h_coin_formatted}) {market_cap_formatted}"
                 )
 
-                # формируем инсайты – только движение ≥ 1 %
                 if (
                     extended
                     and symbol not in STABLECOINS_TO_SKIP_ANALYSIS
@@ -327,33 +337,71 @@ def get_crypto_data(extended: bool = False):
             top_coins_lines.append("\n→ Краткий анализ по топ криптовалютам (исключая стейблкоины):")
             top_coins_lines.extend(insights)
 
-        # ───── SMA7 BTC (не трогал) ─────
+        # --- БЛОК ТЕХНИЧЕСКОГО АНАЛИЗА BTC ---
         try:
-            btc_ticker_yf = yf.Ticker("BTC-USD")
-            btc_hist = btc_ticker_yf.history(period="8d")
+            btc_hist = yf.Ticker("BTC-USD").history(period="210d")
 
-            if not btc_hist.empty and len(btc_hist) >= 2:
-                current_price_btc = btc_hist["Close"].iloc[-1]
-                if len(btc_hist) >= 8:
-                    sma7_btc = btc_hist["Close"].iloc[-8:-1].mean()
-                    btc_price_fmt = format_large_number(current_price_btc).replace("$", "")
-                    sma7_fmt = format_large_number(sma7_btc).replace("$", "")
-                    btc_sma_info_line = f"\n💡 BTC ({btc_price_fmt}) "
-                    if current_price_btc > sma7_btc:
-                        btc_sma_info_line += f"выше 7-дневной средней ({sma7_fmt})."
-                    elif current_price_btc < sma7_btc:
-                        btc_sma_info_line += f"ниже 7-дневной средней ({sma7_fmt})."
-                    else:
-                        btc_sma_info_line += f"на уровне 7-дневной средней ({sma7_fmt})."
-                    top_coins_lines.append(btc_sma_info_line)
+            if not btc_hist.empty and len(btc_hist) > 200:
+                close_prices = btc_hist["Close"]
+                current_price_btc = close_prices.iloc[-1]
+                tech_signals = []
+                sma50: Optional[float] = None
+
+                # SMA 7
+                sma7 = close_prices.iloc[-8:-1].mean()
+                btc_price_fmt = format_large_number(current_price_btc).replace("$", "")
+                sma7_fmt = format_large_number(sma7).replace("$", "")
+                btc_sma_info_line = f"\n💡 BTC ({btc_price_fmt}) "
+                if current_price_btc > sma7:
+                    btc_sma_info_line += f"выше 7-дневной средней ({sma7_fmt})."
                 else:
-                    top_coins_lines.append(f"\n💡 Мало данных для SMA7 BTC (доступно {len(btc_hist) - 1} пред. дн.).")
-            else:
-                top_coins_lines.append("\n💡 Нет исторических данных BTC (yfinance) для SMA.")
-        except Exception as e_sma:
-            print(f"WARNING: Ошибка при расчёте SMA BTC: {e_sma}")  # ЗАМЕНИТЬ НА log()
-            top_coins_lines.append("💡 Не удалось рассчитать 7-дневную среднюю для BTC.")
+                    btc_sma_info_line += f"ниже 7-дневной средней ({sma7_fmt})."
+                top_coins_lines.append(btc_sma_info_line)
 
+                # SMA 50
+                sma50 = close_prices.iloc[-50:].mean()
+                diff50_pct = ((current_price_btc - sma50) / sma50) * 100
+                if abs(diff50_pct) > SMA_DEVIATION_THRESHOLD:
+                    direction = "выше" if diff50_pct > 0 else "ниже"
+                    tech_signals.append(f"— Цена BTC {direction} 50-дневной средней на {diff50_pct:+.1f}%.")
+
+                # Golden/Death Cross
+                sma200_today = close_prices.iloc[-200:].mean()
+                sma50_yesterday = close_prices.iloc[-51:-1].mean()
+                sma200_yesterday = close_prices.iloc[-201:-1].mean()
+
+                diff_today = sma50 - sma200_today
+                diff_yesterday = sma50_yesterday - sma200_yesterday
+                
+                if diff_yesterday < 0 and diff_today > 0:
+                    tech_signals.append("— 📈 <b>Золотой крест:</b> SMA50 пересекла SMA200 снизу вверх (бычий сигнал).")
+                elif diff_yesterday > 0 and diff_today < 0:
+                    tech_signals.append("— 📉 <b>Мёртвый крест:</b> SMA50 пересекла SMA200 сверху вниз (медвежий сигнал).")
+
+                # RSI 14
+                rsi = ta.momentum.RSIIndicator(close_prices, window=14).rsi().iloc[-1]
+                if rsi > 70:
+                    tech_signals.append(f"— 🚦 RSI ({rsi:.0f}) в зоне <b>перекупленности</b> (>70).")
+                elif rsi < 30:
+                    tech_signals.append(f"— 🚦 RSI ({rsi:.0f}) в зоне <b>перепроданности</b> (<30).")
+
+                # Анализ объемов
+                current_volume = btc_hist['Volume'].iloc[-1]
+                avg_volume_30d = btc_hist['Volume'].iloc[-31:-1].mean()
+                if current_volume > 1000 and avg_volume_30d > 0 and current_volume > avg_volume_30d * VOLUME_SPIKE_THRESHOLD:
+                    tech_signals.append(f"— 📈 Объём торгов значительно <b>выше среднего</b> (x{current_volume/avg_volume_30d:.1f}).")
+
+                # Если найден хотя бы один сигнал, выводим весь блок
+                if tech_signals:
+                    top_coins_lines.append("\n→ <b>Техсигналы по BTC</b>:")
+                    top_coins_lines.extend(tech_signals)
+
+            else:
+                 top_coins_lines.append("\n💡 Недостаточно исторических данных BTC для полного теханализа.")
+        except Exception as e_sma:
+            log(f"WARNING: Ошибка при расчёте теханализа для BTC: {e_sma}")
+            top_coins_lines.append("💡 Не удалось рассчитать технические индикаторы для BTC.")
+        
         final_crypto_block_parts.extend(top_coins_lines)
 
     elif not final_crypto_block_parts:
@@ -364,7 +412,6 @@ def get_crypto_data(extended: bool = False):
         final_crypto_block_parts.append("❌ Данные по криптовалютам временно недоступны (общая ошибка).")
 
     return "\n".join(part for part in final_crypto_block_parts if part and part.strip())
-
 
 
 def get_market_data_text():

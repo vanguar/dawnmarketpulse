@@ -6,3 +6,4 @@ nltk==3.8.1
 yfinance>=0.2.4  # Или просто yfinance
 pytz>=2023.3     # Или просто pytz
 googletrans==4.0.0-rc1
+ta
