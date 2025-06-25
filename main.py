@@ -38,7 +38,7 @@ COINMARKETCAP_KEY = os.getenv("COINMARKETCAP_KEY")
 
 MODEL = "gpt-4o-mini"
 TIMEOUT = 120 
-TG_LIMIT_BYTES = 3800
+TG_LIMIT_BYTES = 3400
 GPT_TOKENS_MAIN_ANALYSIS = 1800 
 GPT_TOKENS_INFLUENCER_ANALYSIS = 800
 
@@ -509,12 +509,15 @@ def main():
             fear_and_greed_block,
             derivatives_block,
             whale_activity_block,
-            quote_blocks.get('crypto'),     # ← новый блок
+            quote_blocks.get('crypto'),
             "______________________________",
 
-             # ── МАКРО ─────────────────────────────────
-            macro_block,                      # ← << новинка
+            # ── МАКРО ─────────────────────────────────
+            macro_block,
             "______________________________",
+            "🧩 Макро-анализ GPT:",        # moved ⬆︎
+            macro_analytic_text,           # moved ⬆︎
+            "______________________________",           # разделитель после анализа
 
             # ── ВЛИЯТЕЛИ В НОВОСТЯХ (GPT) ─────────────
             influencer_final_analysis_block if influencer_final_analysis_block else None,
@@ -522,17 +525,13 @@ def main():
 
             # ── ФОНДА ────────────────────────────────
             market_data_block,
-            quote_blocks.get('stock'),       # ← второй новый блок 
+            quote_blocks.get('stock'),
             f"🤖 Анализ и выводы от эксперта GPT на {current_date_str}:",
-            main_analytical_text_from_gpt, # Здесь будет уже дедуплицированный текст
-            keyword_alert(main_analytical_text_from_gpt), 
-                        # Сюда добавляем новый раздел
+            main_analytical_text_from_gpt,
+            keyword_alert(main_analytical_text_from_gpt),
             "______________________________",
-            "🧩 Макро-анализ GPT:",
-            macro_analytic_text,
-            #store_and_compare(main_analytical_text_from_gpt), 
-            
         ]
+
         
         # 5. Чистка и финальная сборка
         valid_components = []
