@@ -18,27 +18,27 @@ SERIES = {
     "US": {
         "flag":  "🇺🇸",
         "cpi":   "CPALTT01USM657N",      # CPI YoY %
-        "ppi":   "PPIACO",               # PPI index ‒ посчитаем YoY
-        "rate":  "FEDFUNDS",             # ставка ФРС %
+        "ppi":   "PPIACO",               # PPI index – посчитаем YoY
+        "rate":  "FEDFUNDS",             # ставка ФРС (daily)
         "unemp": "UNRATE",
     },
     "EU": {
         "flag":  "🇪🇺",
         "cpi":   "CPALTT01EZM657N",
         "ppi":   "PRINTO01EZM661S",      # PPI index (ЕС)
-        "rate":  "ECBDFR",               # ставка ЕЦБ %
+        "rate":  "ECBDFR",               # ставка ЕЦБ (daily)
         "unemp": "LRHUTTTTEZM156S",
     },
     "JP": {
         "flag":  "🇯🇵",
         "cpi":   "CPALTT01JPM657N",
         "ppi":   "WPIDEC1JPM661N",       # PPI index (Япония)
-        "rate":  "IRSTCB01JPM156N",      # ставка BoJ %
+        "rate":  "BOJIORBIL",            # ► свежая ставка BoJ (daily)
         "unemp": None,
     },
 }
 
-MAX_AGE_DAYS = 800       # допустимый лаг ~26 мес
+MAX_AGE_DAYS = 120       # только релизы не старше 4 мес
 
 # ——— helpers --------------------------------------------------------------
 def _fetch(series_id: str, rows: int = 13):
@@ -61,10 +61,10 @@ def _to_float(val: str) -> float:
 
 def _latest(series_id: str):
     """
-    Возвращает (value, date_iso) — берёт ближайшее ненулевое наблюдение,
-    проверяет давность.
+    (value, date_iso) — ближайшее ненулевое наблюдение,
+    проверяем, что свежее MAX_AGE_DAYS.
     """
-    for obs in _fetch(series_id):
+    for obs in _fetch(series_id, 3):          # хватит 3-х последних точек
         try:
             value = _to_float(obs["value"])
             date_iso = obs["date"]
