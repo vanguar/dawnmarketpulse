@@ -15,6 +15,7 @@ from time import sleep
 import traceback
 import re
 from influencer_quotes_reader import get_all_influencer_quotes
+from macro_reader import get_macro_block
 
 # Модули проекта
 from market_reader import get_market_data_text, get_crypto_data
@@ -397,6 +398,11 @@ def main():
         crypto_price_block = get_crypto_data(extended=True) 
         fear_and_greed_block = get_fear_and_greed_index_text()
         derivatives_block = get_derivatives_block() 
+
+        log("🔄 Сбор макро-данных (CPI/Unemp)…")
+        macro_block = get_macro_block()
+        log("📊 Макро блок: " + ("Получен." if macro_block else "Пусто или ошибка."))
+
         
         log("🔄 Сбор данных по китовым транзакциям...")
         whale_activity_block = get_whale_activity_summary()
@@ -475,6 +481,10 @@ def main():
             derivatives_block,
             whale_activity_block,
             quote_blocks.get('crypto'),     # ← новый блок
+            "______________________________",
+
+             # ── МАКРО ─────────────────────────────────
+            macro_block,                      # ← << новинка
             "______________________________",
 
             # ── ВЛИЯТЕЛИ В НОВОСТЯХ (GPT) ─────────────
