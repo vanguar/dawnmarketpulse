@@ -16,6 +16,7 @@ import traceback
 import re
 from influencer_quotes_reader import get_all_influencer_quotes
 from macro_reader import get_macro_block
+from halving_utils import get_btc_halving_countdown_line
 
 # Модули проекта
 from market_reader import get_market_data_text, get_crypto_data
@@ -413,6 +414,7 @@ def main():
 
         run_log_msg = f"⏱ Скрипт запущен ({current_run_time_str} {now_in_zone.strftime('%Z')})"
         report_title_msg = "⚡️ Momentum Pulse:"
+        halving_line = get_btc_halving_countdown_line()
         
         # 1. Сбор основных данных
         log("🔄 Сбор данных по криптовалютам...")
@@ -503,6 +505,7 @@ def main():
         list_of_report_components = [
             run_log_msg,
             report_title_msg,
+            halving_line,
 
             # ── КРИПТО ─────────────────────────────────
             crypto_price_block,
