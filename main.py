@@ -39,7 +39,7 @@ COINMARKETCAP_KEY = os.getenv("COINMARKETCAP_KEY")
 
 MODEL = "gpt-4o-mini"
 TIMEOUT = 120 
-TG_LIMIT_BYTES = 3400
+TG_LIMIT_BYTES = 2500
 GPT_TOKENS_MAIN_ANALYSIS = 1800 
 GPT_TOKENS_INFLUENCER_ANALYSIS = 800
 
@@ -330,24 +330,32 @@ def smart_chunk(text_to_chunk, outer_limit_bytes):
 def send(text_content, add_numeration_if_multiple_parts=False):
     prepared_text_content = prepare_text(str(text_content)) 
     prefix_max_allowance_bytes = 40 
+    # Используем уменьшенный лимит, если нужно добавить нумерацию
     text_chunk_limit_for_smart_chunk = TG_LIMIT_BYTES 
     if add_numeration_if_multiple_parts:
         text_chunk_limit_for_smart_chunk = TG_LIMIT_BYTES - prefix_max_allowance_bytes
+    
     parts_list = smart_chunk(prepared_text_content, text_chunk_limit_for_smart_chunk)
     total_parts_count = len(parts_list)
+    
+    # Если часть всего одна, но лимит был уменьшен из-за флага, пересчитываем
     if add_numeration_if_multiple_parts and total_parts_count == 1:
         parts_list = smart_chunk(prepared_text_content, TG_LIMIT_BYTES) 
         total_parts_count = len(parts_list)
+        
     if not parts_list:
         log("ℹ️ Нет частей для отправки.")
         return
+
     for idx, single_part_content in enumerate(parts_list, 1):
         final_text_for_telegram = single_part_content
         log_part_prefix_display = "" 
+        
         if add_numeration_if_multiple_parts and total_parts_count > 1:
             numeration_prefix_str = f"Часть {idx}/{total_parts_count}:\n\n"
             final_text_for_telegram = numeration_prefix_str + single_part_content
 
+            # Добавляем блок донатов только в последнюю часть
             if idx == total_parts_count:
                 donate_block = """
         ☕ <b>Поддержать проект:</b>
@@ -356,33 +364,47 @@ def send(text_content, add_numeration_if_multiple_parts=False):
         ✉️ <a href="https://t.me/ryanair_deals_bot">Связаться с автором</a>
         """
                 final_text_for_telegram += "\n\n" + donate_block
+            
             log_part_prefix_display = f"Часть {idx}/{total_parts_count} " 
-            final_text_bytes_with_prefix = len(final_text_for_telegram.encode('utf-8'))
-            if final_text_bytes_with_prefix > 4096: 
-                log(f"📛 ВНИМАНИЕ! {log_part_prefix_display}С ПРЕФИКСОМ СЛИШКОМ ДЛИННАЯ ({final_text_bytes_with_prefix}Б > 4096Б). Telegram ОБРЕЖЕТ ЭТУ ЧАСТЬ!")
-        def make_telegram_api_call():
+
+        # --- ВНУТРЕННЯЯ ФУНКЦИЯ ОТПРАВКИ ---
+        def _try_send(text_to_send, parse_mode="HTML"):
+            payload = {
+                "chat_id": CHANNEL_ID, 
+                "text": text_to_send, 
+                "disable_web_page_preview": True
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+                
             return requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": CHANNEL_ID, "text": final_text_for_telegram, "disable_web_page_preview": True, "parse_mode": "HTML"},
+                json=payload,
                 timeout=20 
             )
-        response_from_tg = safe_call(make_telegram_api_call, label=f"❗ Ошибка отправки {log_part_prefix_display}в TG")
-        current_part_final_bytes = len(final_text_for_telegram.encode('utf-8'))
-        current_part_final_chars = len(final_text_for_telegram)
+
+        # 1. Первая попытка (с HTML)
+        response_from_tg = safe_call(lambda: _try_send(final_text_for_telegram, "HTML"), label=f"Попытка HTML {log_part_prefix_display}")
+
+        # 2. Если не вышло (ошибка 400 или нет ответа), пробуем БЕЗ HTML (План Б)
+        if not response_from_tg or response_from_tg.status_code != 200:
+            err_code = response_from_tg.status_code if response_from_tg else "None"
+            log(f"⚠️ {log_part_prefix_display}не ушла c HTML (Код: {err_code}). Пробую отправить без форматирования...")
+            
+            # Пробуем отправить без parse_mode="HTML"
+            response_from_tg = safe_call(lambda: _try_send(final_text_for_telegram, None), label=f"Попытка TEXT {log_part_prefix_display}")
+
+        # Итоги
+        current_part_len = len(final_text_for_telegram)
         if response_from_tg and response_from_tg.status_code == 200:
-            log(f"✅ {log_part_prefix_display}успешно отправлена ({current_part_final_bytes}Б, {current_part_final_chars} симв.)")
-        elif response_from_tg:
-            error_text_preview = final_text_for_telegram[:150].replace('\n', ' ') 
-            log(f"❗ Ошибка от Telegram для {log_part_prefix_display.strip()}: {response_from_tg.status_code} - {response_from_tg.text}")
-            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, симв: {current_part_final_chars}, начало): '{error_text_preview}...'")
+            log(f"✅ {log_part_prefix_display}успешно отправлена ({current_part_len} симв.)")
         else: 
-            error_text_preview = final_text_for_telegram[:150].replace('\n', ' ')
-            log(f"❗ Не удалось отправить {log_part_prefix_display.strip()} (нет ответа от сервера Telegram).")
-            log(f"   Текст проблемной части (байты: {current_part_final_bytes}, симв: {current_part_final_chars}, начало): '{error_text_preview}...'")
+            log(f"📛 ОШИБКА: Не удалось отправить {log_part_prefix_display}даже текстом.")
+            if response_from_tg:
+                log(f"   Ответ TG: {response_from_tg.text}")
+
         if total_parts_count > 1 and idx < total_parts_count: 
-            sleep_duration = 1.5 
-            log(f"ℹ️ Пауза {sleep_duration} сек. перед следующей частью...")
-            sleep(sleep_duration)
+            sleep(1.5)
 
 # --- Основная логика скрипта ---
 def main():
